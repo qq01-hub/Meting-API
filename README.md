@@ -67,14 +67,18 @@ npm run start:node
 
 ### Docker 部署
 
+以下命令在 Linux 宿主机执行，先创建独立的持久化目录（需有 `/opt` 写入权限），避免从 `/root` 执行时生成 `/root/data`：
+
 ```bash
+mkdir -p /opt/meting-api/data
+
 docker run -d \
   --name openmusic-meting-api \
+  --restart unless-stopped \
   -p 3000:3000 \
-  -v ./data:/app/data \
+  --mount type=bind,source=/opt/meting-api/data,target=/app/data \
   w3126197382/meting-api:latest
 ```
-
 ### [OpenMusic-Meting-Api 响度辅助服务](https://github.com/qq01-hub/OpenMusic-Meting-Api-Audio-Loudness)
 
 OpenMusic-Meting-Api 是独立的音频响度分析辅助服务。
