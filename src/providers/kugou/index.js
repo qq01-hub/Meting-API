@@ -78,7 +78,7 @@ export const parseKugouCookie = (raw = '') => Object.fromEntries(text(raw).split
   return index > 0 ? [part.slice(0, index).trim(), part.slice(index + 1).trim()] : null
 }).filter(Boolean))
 
-export const isKugouMembershipRequestParamError = (error) => Number(error?.code || error?.error_code) === 20010
+export const isKugouMembershipRequestParamError = (error) => [20010, 20017].includes(Number(error?.code || error?.error_code))
 export const isKugouNonFatalError = (error) => {
   const code = Number(error?.code || error?.error_code || error?.status)
   return code === 20010 || code === 200101 || code === 31863 || (code >= 500 && code < 600)
@@ -180,7 +180,7 @@ export const requestKugou = async (path, { params = {}, method = 'GET', body, co
   }
   const data = await response.json()
   if (data?.error_code !== undefined && Number(data.error_code) !== 0) {
-    const error = new Error(data?.error || data?.msg || data?.data?.errmsg || '酷狗接口请求失败')
+    const error = new Error(data?.error || data?.msg || data?.data?.errmsg || (typeof data?.data === 'string' ? data.data : '') || '酷狗接口请求失败')
     error.code = Number(data.error_code)
     error.payload = data
     throw error

@@ -336,9 +336,28 @@ export const validateKugouCookie = async (cookieString) => {
     }
 
     try {
+        const verification = await requestKugou('/v1/user_verify', {
+            base: 'https://trackercdngz.kugou.com',
+            params: { module_id: 51 },
+            cookie: { ...cookie, __raw: cookieString },
+        })
+        if (Number(verification?.status) !== 1 || !verification?.data?.auth) {
+            return { valid: false, error: '酷狗登录校验未通过，请重新扫码登录', userInfo: null }
+        }
+    } catch (error) {
+        return {
+            valid: false,
+            error: Number(error.code) === 35005
+                ? '酷狗 token 已失效，请重新扫码登录后再验证'
+                : `酷狗登录校验失败: ${error.message}`,
+            userInfo: null,
+        }
+    }
+
+    try {
         const result = await requestKugou('/v1/get_union_vip', {
             base: 'https://kugouvip.kugou.com',
-            params: { busi_type: 'concept', opt_product_types: 'dvip,qvip', product_type: 'svip' },
+            params: { busi_type: 'concept' },
             cookie: { ...cookie, __raw: cookieString },
         })
         if (Number(result?.status) === 0 || Number(result?.error_code) !== 0 && result?.error_code !== undefined) {
@@ -359,18 +378,17 @@ export const validateKugouCookie = async (cookieString) => {
         }
     } catch (error) {
         if (isKugouMembershipRequestParamError(error)) {
-            const vipType = Number(cookie.vip_type || 0)
             return {
                 valid: true,
                 error: null,
                 userInfo: {
                     userId: cookie.userid,
-                    nickname: '酷狗扫码用户',
+                    nickname: '酷狗用户',
                     avatarUrl: '',
-                    vipType,
-                    isVip: vipType > 0,
+                    vipType: 0,
+                    isVip: false,
                     isSvip: false,
-                    canPlayVip: vipType > 0,
+                    canPlayVip: false,
                     canPlaySvip: false,
                     membershipPending: true,
                 },
