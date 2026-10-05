@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import kugou, { buildKugouDevice, buildKugouLegacyMid, mapKugouSong, normalizeKugouId, buildKugouSignature, buildKugouSongRequest, extractKugouSongs, isKugouNonFatalError, buildKugouPlaylistRequest, isKugouShareCode, extractKugouShareCollectionId, buildKugouShareRequest, buildKugouShareKey } from './index.js'
+import { createHash } from 'node:crypto'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import kugou, { buildKugouDevice, decodeKugouGcid, mapKugouSong, normalizeKugouId, buildKugouSignature, buildKugouSongRequest, extractKugouSongs, isKugouNonFatalError, buildKugouPlaylistRequest, isKugouShareCode, extractKugouShareCollectionId, buildKugouShareRequest, buildKugouShareKey } from './index.js'
+
+afterEach(() => vi.unstubAllGlobals())
 
 describe('kugou provider contract', () => {
   it('registers the unified Meting capabilities', () => {
@@ -66,15 +69,21 @@ describe('kugou provider contract', () => {
     })
   })
 
-  it('generates a deterministic decimal legacy Android MID from a seed', () => {
-    expect(buildKugouLegacyMid('device-seed')).toMatch(/^\d+$/)
-    expect(buildKugouLegacyMid('device-seed')).toBe(buildKugouLegacyMid('device-seed'))
+  it('decodes gcid fields in base 35 without losing large integer precision', () => {
+    expect(decodeKugouGcid('gcid_3zfpq2kyzmz04f')).toBe('collection_3_826461684_22_0')
+    expect(decodeKugouGcid('3zik61ilzx7z09d')).toBe('collection_3_975665376_1162_0')
+    const userid = '9007199254740993'
+    expect(decodeKugouGcid(`gcid_3z${BigInt(userid).toString(35)}zmz04f`)).toBe(`collection_3_${userid}_22_0`)
+    expect(decodeKugouGcid('gcid_3zfpq2kyzmz0')).toBe('')
+    expect(decodeKugouGcid('gcid_3zfpq2kyzz04f')).toBe('')
+    expect(decodeKugouGcid('gcid_invalid')).toBe('')
   })
 
-  it('normalizes desktop and mobile gcid sharing URLs to the mobile parser URL', async () => {
-    const { buildKugouMobilePlaylistUrl } = await import('./index.js')
-    expect(buildKugouMobilePlaylistUrl('https://www.kugou.com/songlist/gcid_3zik61ilzx7z09d/?chl=wechat')).toBe('https://m.kugou.com/songlist/gcid_3zik61ilzx7z09d/')
-    expect(buildKugouMobilePlaylistUrl('https://m.kugou.com/songlist/gcid_3zik61ilzx7z09d/')).toBe('https://m.kugou.com/songlist/gcid_3zik61ilzx7z09d/')
+  it('decodes desktop and mobile sharing URLs locally regardless of tracking parameters', () => {
+    expect(decodeKugouGcid('https://www.kugou.com/songlist/gcid_3zik61ilzx7z09d/?chl=wechat')).toBe('collection_3_975665376_1162_0')
+    expect(decodeKugouGcid('https://m.kugou.com/songlist/gcid_3zfpq2kyzmz04f/?src_cid=3zfpq2kyzmz04f&uid=826461684&chl=qq_client&iszlist=1&qq_aio_chat_type=3 ')).toBe('collection_3_826461684_22_0')
+    expect(decodeKugouGcid('https://m3ws.kugou.com/songlist/gcid_3zfpq2kyzmz04f/')).toBe('collection_3_826461684_22_0')
+    expect(decodeKugouGcid('https://kugou.com.example.org/songlist/gcid_3zfpq2kyzmz04f/')).toBe('')
   })
 
   it('recognizes numeric Kugou share codes without confusing playlist ids', () => {
@@ -166,21 +175,19 @@ describe('kugou provider contract', () => {
       clientver: 11440,
     })
   })
-  it('builds playlist requests like the reference Kugou API module', () => {
-    expect(buildKugouPlaylistRequest('12345678', { page: 2, pagesize: 30 })).toEqual({
-      path: '/pubsongs/v2/get_other_list_file_nofilt',
-      params: {
-        area_code: 1,
-        begin_idx: 30,
-        plat: 1,
-        type: 1,
-        mode: 1,
-        personal_switch: 1,
-        extend_fields: 'abtags,hot_cmt,popularization',
-        pagesize: 30,
-        global_collection_id: '12345678',
-      },
+  it('builds anonymous H5 playlist requests with the reversed signature', () => {
+    const request = buildKugouPlaylistRequest('collection_3_826461684_22_0', { page: 2, pagesize: 100, mid: 'device-mid', clienttime: 1700000000000 })
+    expect(request).toMatchObject({
+      base: 'https://pubsongscdn.kugou.com', path: '/v2/get_other_list_file', signed: false,
+      params: { appid: 1058, clientver: 20000, srcappid: 2919, clienttime: 1700000000000,
+        mid: 'device-mid', uuid: 'device-mid', dfid: '-', uid: 0, token: '', type: 0,
+        module: 'playlist', page: 2, pagesize: 100, global_collection_id: 'collection_3_826461684_22_0' },
     })
+    const { signature, ...params } = request.params
+    const salt = 'NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt'
+    const serialized = Object.keys(params).sort().map(key => `${key}=${params[key]}`).join('')
+    expect(signature).toBe(createHash('md5').update(salt + serialized + salt).digest('hex'))
+    expect(buildKugouPlaylistRequest('5294381').params).toMatchObject({ specialid: '5294381', page: 1, pagesize: 100 })
   })
 
 
@@ -195,33 +202,68 @@ describe('kugou provider contract', () => {
   it('creates the Android request signature deterministically', () => {
     expect(buildKugouSignature({ appid: 3116, clientver: 11440, hash: 'abc' }, '')).toBe('c61e6852e071acf8e5435eff08874afe')
   })
-  it('extracts playlist metadata and tracks from a mobile Kugou share page', async () => {
-    const { extractKugouMobilePlaylist } = await import('./index.js')
-    const html = '<script>window.$output = {"info":{"listinfo":{"name":"甜度100%","list_create_username":"芋圆啵啵","pic":"http://c1.kgimg.com/custom/{size}/cover.jpg","count":52},"songs":[{"hash":"9156BDEEA2A465F95EED8EDDF595DB03","name":"Rosy赵露思 - 有你在","timelen":152607,"albuminfo":{"name":"有你在"},"cover":"http://imge.kugou.com/stdmusic/{size}/cover.jpg"}]}};</script>'
-    expect(extractKugouMobilePlaylist(html)).toMatchObject({
-      trackCount: 52,
-      songs: [{ id: '9156bdeea2a465f95eed8eddf595db03', title: '有你在', author: 'Rosy赵露思', album: '有你在', duration: 153 }],
+  it('fetches every gcid playlist page without HTML, even when a page is shorter than requested', async () => {
+    const pageSizes = [70, 100, 100, 47]
+    const fetchMock = vi.fn(async (url, options) => {
+      expect(url.origin + url.pathname).toBe('https://pubsongscdn.kugou.com/v2/get_other_list_file')
+      expect(url.searchParams.get('global_collection_id')).toBe('collection_3_826461684_22_0')
+      expect(url.searchParams.get('appid')).toBe('1058')
+      expect(options.method).toBe('GET')
+      expect(options.headers.Cookie).toBeUndefined()
+      expect(url.searchParams.get('token')).toBe('')
+      const page = Number(url.searchParams.get('page'))
+      return { ok: true, json: async () => ({ status: 1, error_code: 0, data: { count: 317,
+        info: Array.from({ length: pageSizes[page - 1] }, (_, index) => ({ hash: `HASH-${page}-${index}`, name: 'Imagine', singerinfo: [{ name: 'John Lennon' }] })),
+      } }) }
     })
+    vi.stubGlobal('fetch', fetchMock)
+    const registry = { register: (_, provider) => { registry.provider = provider } }
+    kugou.register(registry)
+    const songs = await registry.provider.handle('playlist', 'https://m.kugou.com/songlist/gcid_3zfpq2kyzmz04f/?uid=826461684&iszlist=1', 'userid=42;token=private-token')
+    expect(songs).toHaveLength(317)
+    expect(songs[0]).toMatchObject({ id: 'hash-1-0', title: 'Imagine', author: 'John Lennon' })
+    expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 
-  it('builds the legacy Android special playlist request for full-track pagination', async () => {
-    const { buildKugouSpecialPlaylistRequest } = await import('./index.js')
-    expect(buildKugouSpecialPlaylistRequest(5294381, 2, 300, { mid: 'device-mid', dfid: 'dfid-1' })).toEqual({
-      base: 'https://gatewayretry.kugou.com',
-      path: '/v2/get_other_list_file',
-      headers: expect.objectContaining({
-        'x-router': 'pubsongscdn.kugou.com',
-        'User-Agent': 'Android9-AndroidPhone-11239-18-0-playlist-wifi',
-        mid: 'device-mid', dfid: 'dfid-1',
-      }),
-      params: expect.objectContaining({
-        specialid: 5294381,
-        specalidpgc: 5294381,
-        page: 2,
-        pagesize: 300,
-        appid: 1005,
-        clientver: 11239,
-      }),
-    })
+  it('resolves short-link redirects from Location without reading the sharing page', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ status: 302, headers: new Headers({ location: 'https://activity.kugou.com/share/index.html?global_specialid=collection_3_826461684_22_0' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 1, error_code: 0, data: { count: 1, info: [{ hash: 'ABC' }] } }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const registry = { register: (_, provider) => { registry.provider = provider } }
+    kugou.register(registry)
+    expect(await registry.provider.handle('playlist', 'https://t1.kugou.com/example')).toMatchObject([{ id: 'abc' }])
+    expect(fetchMock.mock.calls[0][1].redirect).toBe('manual')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects malformed gcids and non-Kugou URLs before making requests', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const registry = { register: (_, provider) => { registry.provider = provider } }
+    kugou.register(registry)
+    await expect(registry.provider.handle('playlist', 'gcid_invalid')).rejects.toThrow('无效')
+    await expect(registry.provider.handle('playlist', 'https://example.org/songlist/gcid_3zfpq2kyzmz04f/')).rejects.toThrow('无效')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does not return a partial playlist when a later page fails', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 1, error_code: 0, data: { count: 101, info: [{ hash: 'ABC' }] } }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 0, error_code: 20010 }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const registry = { register: (_, provider) => { registry.provider = provider } }
+    kugou.register(registry)
+    expect(await registry.provider.handle('playlist', 'gcid_3zfpq2kyzmz04f')).toEqual([])
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('stops pagination when the upstream page is empty', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ status: 1, error_code: 0, data: { count: 317, info: [] } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const registry = { register: (_, provider) => { registry.provider = provider } }
+    kugou.register(registry)
+    expect(await registry.provider.handle('playlist', 'collection_3_826461684_22_0')).toEqual([])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

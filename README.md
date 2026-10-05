@@ -166,6 +166,7 @@ GET /api?server=tencent&type=song&id=0010BrWk2SucQr
 GET /api?server=qishui&type=search&id=风筝误
 GET /api?server=kugou&type=search&id=情歌
 GET /api?server=kugou&type=search_playlist&id=流行
+GET /api?server=kugou&type=playlist&id=gcid_3zfpq2kyzmz04f
 ```
 
 ### 私人漫游

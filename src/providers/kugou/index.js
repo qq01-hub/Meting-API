@@ -11,10 +11,7 @@ const SHARE_APPID = 1001
 const SHARE_CLIENTVER = 20141
 const SHARE_SIGN_SALT = 'OIlwieks28dk2k092lksi2UIkp'
 const SHARE_COMMAND_URL = 'http://t.kugou.com/command/'
-const SPECIAL_PLAYLIST_BASE = 'https://gatewayretry.kugou.com'
-const SPECIAL_PLAYLIST_APPID = 1005
-const SPECIAL_PLAYLIST_CLIENTVER = 11239
-const SPECIAL_PLAYLIST_PAGE_SIZE = 300
+const H5_SIGN_SALT = 'NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt'
 
 const text = (value) => String(value ?? '').trim()
 const md5 = (value) => createHash('md5').update(String(value)).digest('hex')
@@ -65,12 +62,12 @@ export const extractKugouShareCollectionId = (payload = {}) => {
   return /^collection_[A-Za-z0-9_]+$/i.test(id) ? id : ''
 }
 
-export const buildKugouSignature = (params, body = '') => {
+export const buildKugouSignature = (params, body = '', salt = SIGN_SALT) => {
   const serialized = Object.keys(params).sort().map((key) => {
     const value = params[key]
     return `${key}=${typeof value === 'object' ? JSON.stringify(value) : value}`
   }).join('')
-  return md5(`${SIGN_SALT}${serialized}${body || ''}${SIGN_SALT}`)
+  return md5(`${salt}${serialized}${body || ''}${salt}`)
 }
 
 export const parseKugouCookie = (raw = '') => Object.fromEntries(text(raw).split(';').map((part) => {
@@ -91,26 +88,6 @@ export const normalizeKugouId = (id) => {
 
 const imageUrl = (value) => text(value).replace('{size}', '400').replace('{hash}', '').replace('http://', 'https://')
 
-export const extractKugouMobilePlaylist = (html = '') => {
-  const serialized = text(html).match(/window\.\$output\s*=\s*(\{[\s\S]*?\});\s*<\/script>/)?.[1]
-  if (!serialized) return null
-
-  try {
-    const output = JSON.parse(serialized)
-    const info = output?.info || {}
-    const listinfo = info.listinfo || {}
-    const songs = Array.isArray(info.songs) ? info.songs.map(mapKugouSong).filter((song) => song.id) : []
-    if (!songs.length) return null
-    return {
-      trackCount: Number(listinfo.count) || songs.length,
-      specialId: Number(listinfo.specialid || listinfo.id) || 0,
-      songs,
-    }
-  } catch {
-    return null
-  }
-}
-
 export const mapKugouSong = (song = {}) => {
   const info = song.info || {}
   const transParam = song.trans_param || song.transParam || {}
@@ -121,8 +98,8 @@ export const mapKugouSong = (song = {}) => {
   const separator = audioName.indexOf(' - ')
   const audioAuthor = separator > 0 ? audioName.slice(0, separator).trim() : ''
   const audioTitle = separator > 0 ? audioName.slice(separator + 3).trim() : audioName
-  const authors = Array.isArray(song.authors)
-    ? song.authors.map((author) => text(author?.author_name || author?.authorName || author?.name)).filter(Boolean).join(' / ')
+  const authors = Array.isArray(song.authors || song.singerinfo)
+    ? (song.authors || song.singerinfo).map((author) => text(author?.author_name || author?.authorName || author?.name)).filter(Boolean).join(' / ')
     : ''
   const duration = Number(song.duration ?? song.Duration ?? song.timelength ?? song.timelen ?? song.time_length ?? info.duration ?? 0)
   return {
@@ -145,10 +122,6 @@ export const buildKugouDevice = (cookie = {}) => ({
   appid: LITE_APPID,
   clientver: LITE_CLIENTVER,
 })
-
-// The legacy playlist endpoint expects a decimal Android MID. Generate one in
-// the same way as the reference client instead of reusing a captured device ID.
-export const buildKugouLegacyMid = (seed = randomUUID()) => BigInt(`0x${md5(seed)}`).toString()
 
 export const requestKugou = async (path, { params = {}, method = 'GET', body, cookie = {}, base = API_BASE, headers = {}, signed = true } = {}) => {
   const device = buildKugouDevice(cookie)
@@ -292,34 +265,31 @@ const song = async (id, cookie) => {
   }))
 }
 
-const isKugouGcidPlaylist = (value = '') => /^gcid_[A-Za-z0-9]+$/i.test(text(value)) || /^https?:\/\/(?:(?:www\.)?kugou\.com|(?:m3ws\.)?m\.kugou\.com)\/songlist\/gcid_[A-Za-z0-9]+/i.test(text(value))
-
-export const buildKugouMobilePlaylistUrl = (value = '') => {
-  const gcid = extractKugouGcid(value)
-  return gcid ? `https://m.kugou.com/songlist/gcid_${gcid}/` : ''
-}
-
-const fetchKugouMobilePlaylist = async (url) => {
-  const pageUrl = new URL(url)
-  if (pageUrl.hostname === 'm.kugou.com') pageUrl.hostname = 'm3ws.kugou.com'
-  const response = await fetch(pageUrl, {
-    headers: {
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
-    },
-  })
-  if (!response.ok) throw new Error('酷狗移动歌单页面返回 ' + response.status)
-  return extractKugouMobilePlaylist(await response.text())
-}
-
 export const extractKugouGcid = (value = '') => {
-  const input = text(value)
-  const match = input.match(/gcid_([A-Za-z0-9]+)/i)
+  let input = text(value)
+  if (/^https?:\/\//i.test(input)) {
+    const url = new URL(input)
+    if (!isKugouShareUrl(url)) return ''
+    input = url.pathname.replace(/^\/songlist\//i, '').replace(/\/$/, '')
+  }
+  const match = input.match(/^(?:gcid_)?([0-9a-y]+z[0-9a-y]+z[0-9a-y]+z[0-9a-y]+[0-9a-f]{2})$/i)
   return match ? match[1] : ''
 }
 
-const resolveKugouPlaylistId = async (value, cookie = {}) => {
+const isKugouShareUrl = (url) => ['http:', 'https:'].includes(url.protocol) &&
+  (url.hostname === 'kugou.com' || url.hostname.endsWith('.kugou.com')) && !url.username && !url.password && !url.port
+
+export const decodeKugouGcid = (value = '') => {
+  const gcid = extractKugouGcid(value)
+  if (!gcid) return ''
+  const fields = gcid.slice(0, -2).toLowerCase().split('z')
+  return 'collection_' + fields.map((field) => [...field].reduce((number, digit) => number * 35n + BigInt(parseInt(digit, 35)), 0n).toString()).join('_')
+}
+
+const resolveKugouPlaylistId = async (value, cookie = {}, redirects = 0) => {
   const input = text(value)
+  const decoded = decodeKugouGcid(input)
+  if (decoded) return decoded
   if (isKugouShareCode(input)) {
     const request = buildKugouShareRequest(input, {
       mid: cookie.KUGOU_API_MID || cookie.mid || cookie.kg_mid || MID,
@@ -340,94 +310,41 @@ const resolveKugouPlaylistId = async (value, cookie = {}) => {
     return collectionId
   }
 
-  if (!/^https?:\/\//i.test(input)) return input
-  const response = await fetch(input, { headers: { Accept: 'text/html', 'User-Agent': 'Mozilla/5.0' } })
-  if (!response.ok) throw new Error('酷狗歌单页面返回 ' + response.status)
-  const html = await response.text()
-  const globalId = html.match(/global_collection_id\s*['"]?\s*[:=]\s*['"]([^'"]+)/i)
-  const specialId = html.match(/specialId\s*:\s*['"](collection_[^'"]+)/i)
-  return globalId?.[1] || specialId?.[1] || input
+  if (!/^https?:\/\//i.test(input)) {
+    if (isKugouCollectionId(input) || /^\d+$/.test(input)) return input
+    throw new Error('无效的酷狗歌单 ID 或 gcid')
+  }
+  const url = new URL(input)
+  if (!isKugouShareUrl(url)) throw new Error('无效的酷狗分享链接')
+  const collectionId = url.searchParams.get('global_collection_id') || url.searchParams.get('global_specialid')
+  if (isKugouCollectionId(collectionId)) return collectionId
+  const specialId = url.searchParams.get('specialid')
+  if (/^[1-9]\d*$/.test(specialId || '')) return specialId
+  if (redirects >= 5 || url.pathname.startsWith('/songlist/')) throw new Error('酷狗分享链接未包含有效歌单 ID')
+  const response = await fetch(url, { redirect: 'manual', headers: { 'User-Agent': 'Mozilla/5.0' } })
+  await response.body?.cancel()
+  const location = response.headers.get('location')
+  if (response.status >= 300 && response.status < 400 && location) {
+    return resolveKugouPlaylistId(new URL(location, url).href, cookie, redirects + 1)
+  }
+  throw new Error('酷狗分享链接未返回歌单重定向')
 }
-export const buildKugouSpecialPlaylistRequest = (specialId, page = 1, pagesize = SPECIAL_PLAYLIST_PAGE_SIZE, device = {}) => {
-  const id = Number(specialId) || 0
-  const size = Number(pagesize) > 0 ? Number(pagesize) : SPECIAL_PLAYLIST_PAGE_SIZE
+
+export const buildKugouPlaylistRequest = (id, { page = 1, pagesize = 100, clienttime = Date.now(), mid = md5(randomUUID()) } = {}) => {
+  const size = Number(pagesize) > 0 ? Number(pagesize) : 100
   const currentPage = Number(page) > 0 ? Number(page) : 1
   const params = {
-    specialid: id,
-    need_sort: 1,
-    module: 'CloudMusic',
-    clientver: SPECIAL_PLAYLIST_CLIENTVER,
-    pagesize: size,
-    specalidpgc: id,
-    userid: 0,
-    page: currentPage,
-    type: 0,
-    area_code: 1,
-    appid: SPECIAL_PLAYLIST_APPID,
+    appid: 1058, srcappid: 2919, clientver: 20000, clienttime,
+    mid, uuid: mid, dfid: '-', uid: 0, token: '', type: 0, module: 'playlist',
+    page: currentPage, pagesize: size,
+    ...(isKugouCollectionId(id) ? { global_collection_id: text(id) } : { specialid: text(id) }),
   }
   return {
-    base: SPECIAL_PLAYLIST_BASE,
+    base: 'https://pubsongscdn.kugou.com',
     path: '/v2/get_other_list_file',
-    headers: {
-      'User-Agent': 'Android9-AndroidPhone-11239-18-0-playlist-wifi',
-      'x-router': 'pubsongscdn.kugou.com',
-      mid: text(device.mid) || buildKugouLegacyMid(),
-      dfid: text(device.dfid) || '-',
-    },
-    params: {
-      ...params,
-      signature: md5(SHARE_SIGN_SALT + Object.keys(params).sort().map((key) => `${key}=${params[key]}`).join('') + SHARE_SIGN_SALT),
-    },
-  }
-}
-
-const requestKugouSpecialPlaylist = async (specialId, cookie = {}) => {
-  const allSongs = []
-  let page = 1
-  let total = Infinity
-  const device = {
-    mid: text(cookie.KUGOU_API_MID || cookie.mid || cookie.kg_mid) || buildKugouLegacyMid(),
-    dfid: text(cookie.dfid || cookie.kg_dfid) || '-',
-  }
-  while (allSongs.length < total) {
-    const request = buildKugouSpecialPlaylistRequest(specialId, page, SPECIAL_PLAYLIST_PAGE_SIZE, device)
-    const url = new URL(request.path, request.base)
-    Object.entries(request.params).forEach(([key, value]) => url.searchParams.set(key, String(value)))
-    const response = await fetch(url, {
-      headers: {
-        ...request.headers,
-        clienttime: String(Math.floor(Date.now() / 1000)),
-      },
-    })
-    if (!response.ok) throw new Error('酷狗歌单接口返回 ' + response.status)
-    const data = await response.json()
-    if (Number(data?.error_code) !== 0) throw new Error(data?.error || data?.errmsg || '酷狗歌单接口请求失败')
-    const songs = Array.isArray(data?.data?.info) ? data.data.info : []
-    total = Number(data?.data?.count || 0)
-    if (!songs.length) break
-    allSongs.push(...songs)
-    if (songs.length < request.params.pagesize) break
-    page += 1
-  }
-  return allSongs.map(mapKugouSong).filter((song) => song.id)
-}
-
-export const buildKugouPlaylistRequest = (id, { page = 1, pagesize = 30 } = {}) => {
-  const size = Number(pagesize) > 0 ? Number(pagesize) : 30
-  const currentPage = Number(page) > 0 ? Number(page) : 1
-  return {
-    path: '/pubsongs/v2/get_other_list_file_nofilt',
-    params: {
-      area_code: 1,
-      begin_idx: (currentPage - 1) * size,
-      plat: 1,
-      type: 1,
-      mode: 1,
-      personal_switch: 1,
-      extend_fields: 'abtags,hot_cmt,popularization',
-      pagesize: size,
-      global_collection_id: text(id),
-    },
+    signed: false,
+    headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://activity.kugou.com/' },
+    params: { ...params, signature: buildKugouSignature(params, '', H5_SIGN_SALT) },
   }
 }
 
@@ -435,35 +352,20 @@ export const isKugouCollectionId = (value = '') => /^collection_[A-Za-z0-9_]+$/i
 
 const playlist = async (id, cookie) => {
   try {
-    if (isKugouGcidPlaylist(id)) {
-      const mobilePlaylist = await fetchKugouMobilePlaylist(buildKugouMobilePlaylistUrl(id))
-      if (mobilePlaylist) {
-        if (mobilePlaylist.specialId && mobilePlaylist.trackCount > mobilePlaylist.songs.length) {
-          try {
-            const songs = await requestKugouSpecialPlaylist(mobilePlaylist.specialId, cookie)
-            if (songs.length) return songs
-          } catch {
-            // The mobile page's embedded list remains a usable fallback.
-          }
-        }
-        return mobilePlaylist.songs
-      }
-    }
     const resolvedId = await resolveKugouPlaylistId(id, cookie)
-    const pageSize = 300
     const allSongs = []
-    let begin = 0
+    const mid = md5(randomUUID())
+    let page = 1
     let total = Infinity
     while (allSongs.length < total) {
-      const request = buildKugouPlaylistRequest(resolvedId, { page: Math.floor(begin / pageSize) + 1, pagesize: pageSize })
-      request.params.begin_idx = begin
-      const data = await requestKugou(request.path, { params: request.params, cookie })
-      const pageSongs = data?.data?.songs || []
+      const request = buildKugouPlaylistRequest(resolvedId, { page, mid })
+      const data = await requestKugou(request.path, request)
+      if (Number(data?.status) !== 1) throw new Error(data?.errmsg || '酷狗歌单接口请求失败')
+      const pageSongs = Array.isArray(data?.data?.info) ? data.data.info : []
       total = Number(data?.data?.count || 0)
       if (!pageSongs.length) break
       allSongs.push(...pageSongs)
-      begin += pageSongs.length
-      if (pageSongs.length < pageSize) break
+      page += 1
     }
     return allSongs.map(mapKugouSong).filter((song) => song.id)
   } catch (error) {
