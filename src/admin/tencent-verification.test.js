@@ -25,7 +25,7 @@ it('opens a Cookie-bound verification browser only for an authenticated admin', 
     vi.stubGlobal('fetch', mockFetch)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     await get_song_url('0010BrWk2SucQr', cookie, { quality: 'standard' })
-    vi.spyOn(store, 'getCookies').mockReturnValue([{ id: 'account-1', platform: 'tencent', cookie }, { id: 'account-2', platform: 'tencent', cookie: 'other' }])
+    vi.spyOn(store, 'getCookies').mockReturnValue([{ id: 'account-1', platform: 'tencent', cookie, note: '主力 QQ', userInfo: { nickname: '音乐爱好者', userId: '789' }, urlErrorCount: 2, tencentSliderCount: 4, tencentCooldownUntil: 4600000 }, { id: 'account-2', platform: 'tencent', cookie: 'other' }])
     vi.spyOn(store, 'validateToken').mockReturnValue(true)
     vi.spyOn(store.users, 'get').mockReturnValue({ role: 'admin' })
     const app = new Hono()
@@ -34,7 +34,12 @@ it('opens a Cookie-bound verification browser only for an authenticated admin', 
     expect((await app.request('/admin/cookies/tencent-verifications')).status).toBe(401)
     const response = await app.request('/admin/cookies/tencent-verifications', { headers: { 'X-Auth-Username': 'admin', 'X-Auth-Token': 'test' } })
     expect(response.status).toBe(200)
-    expect((await response.json()).data).toEqual([{ id: 'account-1', songmid: '0010BrWk2SucQr', confirmed: true }])
+    const responseBody = await response.json()
+    expect(responseBody.data).toEqual([{ id: 'account-1', note: '主力 QQ', nickname: '音乐爱好者', accountId: '789', songmid: '0010BrWk2SucQr', confirmed: true, urlErrorCount: 2, tencentSliderCount: 4, tencentCooldownUntil: 4600000 }])
+    expect(JSON.stringify(responseBody)).not.toContain('PRIVATE_COOKIE')
+    expect(JSON.stringify(responseBody)).not.toContain('PRIVATE_TOKEN')
+    const list = await (await app.request('/admin/cookies', { headers: { 'X-Auth-Username': 'admin', 'X-Auth-Token': 'test' } })).json()
+    expect(list.data.map(account => account.tencentSliderCount)).toEqual([4, 0])
 
     vi.spyOn(store, 'getCookie').mockReturnValue({ id: 'account-1', platform: 'tencent', cookie })
     const headers = { 'X-Auth-Username': 'admin', 'X-Auth-Token': 'test' }
@@ -63,7 +68,7 @@ it('restores a three-failure prompt after the short-lived challenge expires and 
     const app = new Hono()
     adminRoutes(app)
     const headers = { 'X-Auth-Username': 'admin', 'X-Auth-Token': 'test' }
-    expect((await (await app.request('/admin/cookies/tencent-verifications', { headers })).json()).data).toEqual([{ id: 'old-account', songmid: '', confirmed: false }])
+    expect((await (await app.request('/admin/cookies/tencent-verifications', { headers })).json()).data).toEqual([{ id: 'old-account', note: '', nickname: '', accountId: '998', songmid: '', confirmed: false, urlErrorCount: 3, tencentSliderCount: 0, tencentCooldownUntil: 0 }])
 
     vi.stubGlobal('fetch', vi.fn()
         .mockResolvedValueOnce({ json: async () => ({ songinfo: { data: { track_info: { file: { media_mid: 'media', size_128mp3: 1 } } } } }) })

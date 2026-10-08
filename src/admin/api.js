@@ -40,7 +40,7 @@ const qishuiVerifyAuth = async (c, next) => {
 }
 
 const formatCookieForDisplay = (cookie) => {
-    const { id, platform, createdAt, updatedAt, createdBy, isActive, isValid, validatedAt, userInfo, validationError, urlErrorCount } = cookie
+    const { id, platform, createdAt, updatedAt, createdBy, isActive, isValid, validatedAt, userInfo, validationError, urlErrorCount, tencentSliderCount } = cookie
     const legacyContribution = String(cookie.note || '').startsWith('contribution:')
     const providerName = String(cookie.providerName || cookie.createdBy || '').trim()
     const note = legacyContribution ? `首页共享 · ${providerName || '匿名用户'}` : cookie.note
@@ -51,6 +51,7 @@ const formatCookieForDisplay = (cookie) => {
     return {
         id, platform, cookiePreview, note, providerName, source: cookie.source || (legacyContribution ? 'contribution' : 'admin'),
         createdAt, updatedAt, createdBy, isActive, isValid, validatedAt, userInfo, validationError, urlErrorCount: urlErrorCount || 0,
+        tencentSliderCount: Number(tencentSliderCount) || 0,
         fmPriority: store.getFmPriorityCookieId(platform) === id,
     }
 }
@@ -116,10 +117,19 @@ export const adminRoutes = (app) => {
     })
 
     app.get('/admin/cookies/tencent-verifications', authMiddleware, adminMiddleware, (c) => {
-        const data = store.getCookies('tencent').flatMap(({ id, cookie, tencentVerificationSongmid, lastFailedSongmid, urlErrorCount }) => {
+        const data = store.getCookies('tencent').flatMap(account => {
+            const { id, cookie, userInfo, tencentVerificationSongmid, lastFailedSongmid, urlErrorCount, tencentSliderCount, tencentCooldownUntil } = account
             const pending = getTencentVerification(cookie)
             if (!pending && !tencentVerificationSongmid && (urlErrorCount || 0) < 3) return []
-            return [{ id, songmid: pending?.songmid || tencentVerificationSongmid || lastFailedSongmid || '', confirmed: Boolean(pending || tencentVerificationSongmid) }]
+            const { note } = formatCookieForDisplay(account)
+            return [{
+                id, note: note || '', nickname: userInfo?.nickname || '',
+                accountId: String(userInfo?.userId || cookie.match(/(?:^|;)\s*(?:uin|wxuin)=([^;]+)/)?.[1]?.trim() || ''),
+                songmid: pending?.songmid || tencentVerificationSongmid || lastFailedSongmid || '',
+                confirmed: Boolean(pending || tencentVerificationSongmid),
+                urlErrorCount: Number(urlErrorCount) || 0, tencentSliderCount: Number(tencentSliderCount) || 0,
+                tencentCooldownUntil: Number(tencentCooldownUntil) || 0,
+            }]
         })
         c.header('Cache-Control', 'no-store')
         return c.json({ success: true, data })
@@ -142,7 +152,7 @@ export const adminRoutes = (app) => {
                     return c.json({ success: false, error: '播放链接已恢复，无需滑块验证' }, 400)
                 }
                 pending = getTencentVerification(cookie.cookie)
-                if (pending) await store.recordCookieUrlFailure(id, songmid, true)
+                if (data?.verificationRequired) await store.recordCookieUrlFailure(id, songmid, true)
             } catch {}
             if (!pending) return c.json({ success: false, error: 'QQ 音乐未返回滑块验证，请检查歌曲权限或稍后重试' }, 400)
         }
@@ -188,7 +198,7 @@ export const adminRoutes = (app) => {
             if (data?.url) {
                 await store.recordCookieUrlSuccess(cookie.id)
                 await closeTencentVerification(cookie.id)
-            } else await store.recordCookieUrlFailure(cookie.id, songmid, Boolean(getTencentVerification(cookie.cookie)))
+            } else await store.recordCookieUrlFailure(cookie.id, songmid, Boolean(data?.verificationRequired))
             return c.json({ success: Boolean(data?.url), error: data?.url ? undefined : '仍需验证，请确认滑块已完成后重试' })
         } catch {
             return c.json({ success: false, error: '播放重试失败，请稍后再试' }, 502)

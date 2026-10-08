@@ -6,6 +6,21 @@ afterEach(() => {
     vi.unstubAllGlobals()
 })
 
+it.each([
+    { code: '104009' },
+    { req_0: { code: 104009 } },
+    { req_0: { data: { retcode: '104009' } } },
+    { req_0: { data: { midurlinfo: [{ result: 104009 }] } } },
+])('reports slider failures even without a usable verification link (%j)', async (response) => {
+    const fetchMock = vi.fn()
+        .mockResolvedValueOnce({ json: async () => ({}) })
+        .mockResolvedValueOnce({ json: async () => response })
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await get_song_url('song', 'uin=no-link', { quality: 'master' })).toEqual({ url: '', verificationRequired: true })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(getTencentVerification('uin=no-link')).toBeNull()
+})
+
 it('keeps an official verification link for the affected Cookie when Tencent requires a slider', async () => {
     const cookie = 'uin=456;qqmusic_key=PRIVATE_COOKIE'
     const validUrl = String.raw`https\://c.y.qq.com/r/fy6U?\_wv=8192&tokenValid=PRIVATE_TOKEN`
@@ -14,7 +29,7 @@ it('keeps an official verification link for the affected Cookie when Tencent req
         .mockResolvedValueOnce({ json: async () => ({ req_0: { code: 104009, data: { retcode: 104009, validUrl, midurlinfo: [{ result: 0, purl: '' }] } } }) }))
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    expect(await get_song_url('0010BrWk2SucQr', cookie, { quality: 'standard' })).toBeNull()
+    expect(await get_song_url('0010BrWk2SucQr', cookie, { quality: 'standard' })).toEqual({ url: '', verificationRequired: true })
     expect(getTencentVerification(cookie)).toEqual({ songmid: '0010BrWk2SucQr', validUrl: 'https://c.y.qq.com/r/fy6U?_wv=8192&tokenValid=PRIVATE_TOKEN' })
     expect(getTencentVerification('uin=other')).toBeNull()
 })
@@ -27,7 +42,7 @@ it('does not treat a vkey payload as playable when Tencent requires verification
         .mockResolvedValueOnce({ status: 206 }))
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    expect(await get_song_url('0010BrWk2SucQr', cookie, { quality: 'standard' })).toBeNull()
+    expect(await get_song_url('0010BrWk2SucQr', cookie, { quality: 'standard' })).toEqual({ url: '', verificationRequired: true })
     expect(getTencentVerification(cookie)?.songmid).toBe('0010BrWk2SucQr')
 })
 

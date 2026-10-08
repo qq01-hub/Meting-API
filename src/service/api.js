@@ -1,5 +1,4 @@
 import Providers from "../providers/index.js"
-import { getTencentVerification } from '../providers/tencent/song.js'
 import { format as lyricFormat, get_url } from "../util.js"
 import { wrapQishuiPlayPayload } from "../providers/qishui/audio.js"
 import store, { selectRequestCookie } from "../admin/store.js"
@@ -46,6 +45,11 @@ export default async (ctx) => {
     }
 
     cookie = selectRequestCookie(explicitCookie, storedCookie)
+    if (server === 'tencent' && type === 'url' && !explicitCookie && !storedCookie
+        && store.getCookies(server).some(account => account.isActive && account.isValid !== false)) {
+        ctx.status(403)
+        return ctx.json({ error: 'no url' })
+    }
 
     const signerUrl = server === 'qishui' ? resolveQishuiSignerUrl(store.getQishuiSignerUrl()) : ''
     if (server === 'qishui' && type === 'url') {
@@ -59,7 +63,7 @@ export default async (ctx) => {
     try {
         data = await p.get(server).handle(type, id, cookie, { quality, signerUrl })
     } catch (error) {
-        if ((!requiresSvip && !fmUrl) || !storedCookie) throw error
+        if ((!requiresSvip && !fmUrl && !(server === 'tencent' && type === 'url')) || !storedCookie) throw error
     }
 
     if (type === 'url') {
@@ -69,8 +73,28 @@ export default async (ctx) => {
             : data
 
         let url = payload?.url || ''
-        if (!url && fmUrl && storedCookie) {
-            await store.recordCookieUrlFailure(storedCookie.id, id, server === 'tencent' && Boolean(getTencentVerification(cookie)))
+        if (server === 'tencent' && storedCookie) {
+            const attemptedIds = []
+            const attemptedCookies = new Set()
+            while (!url) {
+                attemptedIds.push(storedCookie.id)
+                attemptedCookies.add(cookie)
+                await store.recordCookieUrlFailure(storedCookie.id, id, Boolean(payload?.verificationRequired))
+                const fallbackCookie = store.getFallbackCookieForQuality(server, quality || 'standard', attemptedIds)
+                if (!fallbackCookie || attemptedCookies.has(fallbackCookie.cookie)) break
+                storedCookie = fallbackCookie
+                cookie = fallbackCookie.cookie
+                data = null
+                try {
+                    data = await p.get(server).handle(type, id, cookie, { quality, signerUrl })
+                } catch {}
+                payload = typeof data === 'string'
+                    ? buildUrlPayload(data, quality || 'standard', quality || 'standard', server)
+                    : data
+                url = payload?.url || ''
+            }
+        } else if (!url && fmUrl && storedCookie) {
+            await store.recordCookieUrlFailure(storedCookie.id, id, false)
             const fallbackCookie = store.getFallbackCookieForQuality(server, quality || 'standard', storedCookie.id)
             if (fallbackCookie) {
                 storedCookie = fallbackCookie
@@ -82,7 +106,7 @@ export default async (ctx) => {
                         : data
                     url = payload?.url || ''
                 } catch {}
-                if (!url) await store.recordCookieUrlFailure(fallbackCookie.id, id, server === 'tencent' && Boolean(getTencentVerification(cookie)))
+                if (!url) await store.recordCookieUrlFailure(fallbackCookie.id, id, false)
             }
         } else if (!url && requiresSvip && storedCookie) {
             try {
@@ -93,7 +117,7 @@ export default async (ctx) => {
                 url = payload?.url || ''
             } catch {}
         }
-        if (!url && !fmUrl && storedCookie) await store.recordCookieUrlFailure(storedCookie.id, id, server === 'tencent' && Boolean(getTencentVerification(cookie)))
+        if (!url && !fmUrl && storedCookie && server !== 'tencent') await store.recordCookieUrlFailure(storedCookie.id, id, false)
         if (!url) {
             console.warn('[Meting] no url', JSON.stringify({
                 server,
@@ -124,6 +148,9 @@ export default async (ctx) => {
             if (needsStandardLoudnessUrl(quality)) {
                 try {
                     const standardData = await p.get(server).handle('url', id, cookie, { quality: 'standard', signerUrl })
+                    if (server === 'tencent' && storedCookie && standardData?.verificationRequired) {
+                        await store.recordCookieUrlFailure(storedCookie.id, id, true)
+                    }
                     const standardPayload = typeof standardData === 'string'
                         ? buildUrlPayload(standardData, 'standard', 'standard', server)
                         : standardData

@@ -28,6 +28,10 @@ const COOKIE_ENCRYPTION_PREFIX = 'enc:v1:'
 
 const MAX_LOGIN_ATTEMPTS = 5
 const LOCKOUT_DURATION = 15 * 60 * 1000
+const TENCENT_SLIDER_COOLDOWN = 60 * 60 * 1000
+
+const isCookieAvailable = (cookie) => cookie.isActive !== false && cookie.isValid !== false
+    && !(cookie.platform === 'tencent' && Number(cookie.tencentCooldownUntil) > Date.now())
 
 const isContributionCookie = (cookie) => cookie?.source === 'contribution'
     || Boolean(cookie?.contributionKey)
@@ -71,7 +75,7 @@ const cookieCanPlayRequirement = (cookie, requirement) => {
 }
 
 export const selectCookieForQuality = (cookies, quality, platform, preferFm = false) => {
-    const available = [...cookies].filter(cookie => cookie.isActive !== false && cookie.isValid !== false)
+    const available = [...cookies].filter(isCookieAvailable)
     if (!available.length) return null
     const requirement = getQualityRequirement(quality, platform)
     const fmCookie = preferFm ? selectFmCookie(available) : null
@@ -594,7 +598,7 @@ class DataStore {
         const updatedCookie = {
             ...cookie,
             ...updates,
-            ...(updates.cookie && updates.cookie !== cookie.cookie ? { urlErrorCount: 0, lastFailedSongmid: '', tencentVerificationSongmid: '' } : {}),
+            ...(updates.cookie && updates.cookie !== cookie.cookie ? { urlErrorCount: 0, lastFailedSongmid: '', tencentVerificationSongmid: '', tencentCooldownUntil: 0 } : {}),
             updatedAt: Date.now()
         }
         
@@ -631,7 +635,7 @@ class DataStore {
     }
 
     getActiveCookie(platform) {
-        const cookies = this.getCookies(platform).filter(c => c.isActive && c.isValid !== false)
+        const cookies = this.getCookies(platform).filter(c => c.isActive && isCookieAvailable(c))
         return selectActiveCookie(cookies)
     }
 
@@ -640,7 +644,7 @@ class DataStore {
     }
 
     getActiveCookieForFm(platform) {
-        const cookies = this.getCookies(platform).filter(c => c.isActive && c.isValid !== false)
+        const cookies = this.getCookies(platform).filter(c => c.isActive && isCookieAvailable(c))
         const priorityId = this.getFmPriorityCookieId(platform)
         if (priorityId) {
             const priorityCookie = cookies.find(cookie => cookie.id === priorityId)
@@ -675,7 +679,7 @@ class DataStore {
      * @returns {object|null} - 选中的 cookie 或 null
      */
     getActiveCookieForQuality(platform, quality = 'standard', preferFm = false) {
-        const cookies = this.getCookies(platform).filter(c => c.isActive && c.isValid !== false)
+        const cookies = this.getCookies(platform).filter(c => c.isActive && isCookieAvailable(c))
         if (cookies.length === 0) return null
         const candidates = preferFm
             ? cookies.map(cookie => ({ ...cookie, fmPriority: cookie.id === this.getFmPriorityCookieId(platform) }))
@@ -684,10 +688,13 @@ class DataStore {
     }
 
     getFallbackCookieForQuality(platform, quality, excludedId) {
+        const excludedIds = new Set(Array.isArray(excludedId) ? excludedId : [excludedId])
+        const excludedCookies = new Set([...excludedIds].map(id => this.getCookie(id)?.cookie).filter(Boolean))
         const requirement = getQualityRequirement(quality, platform)
         const cookies = this.getCookies(platform).filter(cookie =>
-            cookie.id !== excludedId && cookie.isActive && cookie.isValid !== false
-            && cookie.userInfo && cookieCanPlayRequirement(cookie, requirement))
+            !excludedIds.has(cookie.id) && !excludedCookies.has(cookie.cookie) && cookie.isActive && isCookieAvailable(cookie)
+            && (platform === 'tencent' || (cookie.userInfo && cookieCanPlayRequirement(cookie, requirement))))
+        if (platform === 'tencent') return selectCookieForQuality(cookies, quality, platform)
         return selectActiveCookie(cookies)
     }
 
@@ -695,19 +702,24 @@ class DataStore {
         const cookie = this.cookies.get(id)
         if (!cookie) return
         cookie.urlErrorCount = (cookie.urlErrorCount || 0) + 1
-        if (cookie.platform === 'tencent' && songmid) {
-            cookie.lastFailedSongmid = songmid
-            if (verificationRequired) cookie.tencentVerificationSongmid = songmid
+        if (cookie.platform === 'tencent') {
+            if (songmid) cookie.lastFailedSongmid = songmid
+            if (verificationRequired) {
+                cookie.tencentSliderCount = (Number(cookie.tencentSliderCount) || 0) + 1
+                cookie.tencentVerificationSongmid = songmid
+                cookie.tencentCooldownUntil = Date.now() + TENCENT_SLIDER_COOLDOWN
+            }
         }
         await this.saveToFile()
     }
 
     async recordCookieUrlSuccess(id) {
         const cookie = this.cookies.get(id)
-        if (!cookie || cookie.platform !== 'tencent' || (!cookie.urlErrorCount && !cookie.lastFailedSongmid && !cookie.tencentVerificationSongmid)) return
+        if (!cookie || cookie.platform !== 'tencent' || (!cookie.urlErrorCount && !cookie.lastFailedSongmid && !cookie.tencentVerificationSongmid && !cookie.tencentCooldownUntil)) return
         cookie.urlErrorCount = 0
         cookie.lastFailedSongmid = ''
         cookie.tencentVerificationSongmid = ''
+        cookie.tencentCooldownUntil = 0
         await this.saveToFile()
     }
 

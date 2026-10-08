@@ -85,13 +85,49 @@ describe('Meting 全局 Cookie 优先级', () => {
         try {
             await store.recordCookieUrlFailure(account.id, '0010BrWk2SucQr', true)
             expect(account).toMatchObject({ urlErrorCount: 3, lastFailedSongmid: '0010BrWk2SucQr', tencentVerificationSongmid: '0010BrWk2SucQr' })
+            expect(account.tencentSliderCount).toBe(1)
+            await store.recordCookieUrlFailure(account.id, 'other-song', false)
+            expect(account.tencentSliderCount).toBe(1)
+            await store.recordCookieUrlFailure(account.id, 'other-song', true)
+            expect(account.tencentSliderCount).toBe(2)
             expect(save).toHaveBeenCalled()
             await store.recordCookieUrlSuccess(account.id)
             expect(account).toMatchObject({ urlErrorCount: 0, lastFailedSongmid: '', tencentVerificationSongmid: '' })
+            expect(account.tencentSliderCount).toBe(2)
         } finally {
             store.cookies.delete(account.id)
             save.mockRestore()
         }
     })
 
+    it('temporarily skips slider accounts for normal, FM and quality selection', async () => {
+        const account = { id: 'cooldown-test', platform: 'tencent', cookie: 'uin=123', isActive: true, isValid: true, updatedAt: 2, userInfo: { canPlaySvip: true } }
+        const backup = { id: 'cooldown-backup', platform: 'tencent', cookie: 'uin=456', isActive: true, isValid: true, updatedAt: 1, userInfo: { canPlayVip: true } }
+        const getCookies = vi.spyOn(store, 'getCookies').mockReturnValue([account, backup])
+        const save = vi.spyOn(store, 'saveToFile').mockResolvedValue()
+        const priority = vi.spyOn(store, 'getFmPriorityCookieId').mockReturnValue(account.id)
+        const now = vi.spyOn(Date, 'now').mockReturnValue(1000000)
+        store.cookies.set(account.id, account)
+        try {
+            await store.recordCookieUrlFailure(account.id, 'song', true)
+            expect(account.tencentCooldownUntil).toBe(4600000)
+            expect(account.isValid).toBe(true)
+            expect(store.getActiveCookie('tencent')).toBe(backup)
+            expect(store.getActiveCookieForFm('tencent')).toBe(backup)
+            expect(store.getActiveCookieForQuality('tencent', 'master', true)?.id).toBe(backup.id)
+            expect(store.getFallbackCookieForQuality('tencent', 'master', backup.id)).toBeNull()
+            now.mockReturnValue(4600000)
+            expect(store.getActiveCookie('tencent')).toBe(account)
+            await store.recordCookieUrlFailure(account.id, 'song', true)
+            await store.recordCookieUrlSuccess(account.id)
+            expect(account.tencentCooldownUntil).toBe(0)
+            expect(store.getActiveCookieForFm('tencent')).toBe(account)
+        } finally {
+            store.cookies.delete(account.id)
+            getCookies.mockRestore()
+            save.mockRestore()
+            priority.mockRestore()
+            now.mockRestore()
+        }
+    })
 })

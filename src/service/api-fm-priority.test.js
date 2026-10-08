@@ -80,6 +80,7 @@ describe('FM account selection', () => {
         const account = { id: 'tencent-failure-test', platform: 'tencent', cookie: 'uin=123;qqmusic_key=test', isValid: true, isActive: true, urlErrorCount: 2 }
         store.cookies.set(account.id, account)
         vi.spyOn(store, 'getActiveCookie').mockReturnValue(account)
+        vi.spyOn(store, 'getFallbackCookieForQuality').mockReturnValue(null)
         vi.spyOn(store, 'saveToFile').mockResolvedValue()
         vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle: vi.fn().mockResolvedValue(null) })
         const ctx = { req: { query: () => ({ server: 'tencent', type: 'url', id: '0010BrWk2SucQr' }), header: () => '' }, status: vi.fn(), json: vi.fn(value => value) }
@@ -95,6 +96,7 @@ describe('FM account selection', () => {
         const account = { id: 'tencent-slider-api-test', platform: 'tencent', cookie: 'uin=456;qqmusic_key=test', isValid: true, isActive: true }
         store.cookies.set(account.id, account)
         vi.spyOn(store, 'getActiveCookie').mockReturnValue(account)
+        vi.spyOn(store, 'getFallbackCookieForQuality').mockReturnValue(null)
         vi.spyOn(store, 'saveToFile').mockResolvedValue()
         vi.spyOn(console, 'warn').mockImplementation(() => {})
         vi.stubGlobal('fetch', vi.fn()
@@ -125,5 +127,82 @@ describe('FM account selection', () => {
         } finally {
             store.cookies.delete(account.id)
         }
+    })
+    it.each([undefined, '1'])('tries every QQ backup and skips challenged accounts on the next request (fm=%s)', async (fm) => {
+        const accounts = [3, 2, 1].map(number => ({
+            id: `qq-backup-${number}`, platform: 'tencent', cookie: `uin=${number};qqmusic_key=test`,
+            isActive: true, isValid: true, updatedAt: number,
+            userInfo: { canPlaySvip: number > 1, canPlayVip: true },
+        }))
+        accounts.forEach(account => store.cookies.set(account.id, account))
+        vi.spyOn(store, 'getCookies').mockReturnValue(accounts)
+        vi.spyOn(store, 'getFmPriorityCookieId').mockReturnValue(accounts[0].id)
+        vi.spyOn(store, 'saveToFile').mockResolvedValue()
+        const handle = vi.fn(async (type, id, cookie) => cookie === accounts[2].cookie
+            ? { url: 'https://example.com/song.flac', quality: 'SQ无损' }
+            : { url: '', verificationRequired: true })
+        vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle })
+        const ctx = {
+            req: { query: () => ({ server: 'tencent', type: 'url', id: 'song', quality: 'master', fm }), header: () => '' },
+            status: vi.fn(), json: vi.fn(value => value),
+        }
+        try {
+            expect(await api(ctx)).toMatchObject({ url: 'https://example.com/song.flac', quality: 'SQ无损' })
+            expect(handle.mock.calls.map(call => call[2])).toEqual(accounts.map(account => account.cookie))
+            expect(accounts[0].tencentCooldownUntil).toBeGreaterThan(Date.now())
+            expect(accounts[1].tencentCooldownUntil).toBeGreaterThan(Date.now())
+            expect(accounts[0].urlErrorCount).toBe(1)
+            expect(accounts[1].urlErrorCount).toBe(1)
+            handle.mockClear()
+            await api(ctx)
+            expect(handle.mock.calls.map(call => call[2])).toEqual([accounts[2].cookie])
+        } finally {
+            accounts.forEach(account => store.cookies.delete(account.id))
+        }
+    })
+
+    it('handles QQ exceptions and exhausts backups without looping or retrying the same Cookie', async () => {
+        const accounts = [3, 2, 1].map(number => ({ id: `qq-exhaust-${number}`, platform: 'tencent', cookie: `uin=${number}`, isActive: true, isValid: true, updatedAt: number }))
+        const duplicate = { ...accounts[0], id: 'qq-duplicate', updatedAt: 0 }
+        accounts.forEach(account => store.cookies.set(account.id, account))
+        vi.spyOn(store, 'getCookies').mockReturnValue([...accounts, duplicate])
+        vi.spyOn(store, 'saveToFile').mockResolvedValue()
+        const handle = vi.fn().mockRejectedValueOnce(new Error('network')).mockResolvedValue(null)
+        vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle })
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const ctx = { req: { query: () => ({ server: 'tencent', type: 'url', id: 'song' }), header: () => '' }, status: vi.fn(), json: vi.fn(value => value) }
+        try {
+            expect(await api(ctx)).toEqual({ error: 'no url' })
+            expect(ctx.status).toHaveBeenCalledWith(403)
+            expect(handle.mock.calls.map(call => call[2])).toEqual(accounts.map(account => account.cookie))
+            expect(accounts.map(account => account.urlErrorCount)).toEqual([1, 1, 1])
+            expect(accounts.every(account => !account.tencentCooldownUntil && account.isValid)).toBe(true)
+        } finally {
+            accounts.forEach(account => store.cookies.delete(account.id))
+        }
+    })
+
+    it('does not replace an explicitly supplied QQ Cookie with server accounts', async () => {
+        const fallback = vi.spyOn(store, 'getFallbackCookieForQuality')
+        const failure = vi.spyOn(store, 'recordCookieUrlFailure')
+        const handle = vi.fn().mockResolvedValue({ url: '', verificationRequired: true })
+        vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle })
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const ctx = { req: { query: () => ({ server: 'tencent', type: 'url', id: 'song' }), header: () => 'uin=explicit' }, status: vi.fn(), json: vi.fn(value => value) }
+        expect(await api(ctx)).toEqual({ error: 'no url' })
+        expect(handle).toHaveBeenCalledTimes(1)
+        expect(fallback).not.toHaveBeenCalled()
+        expect(failure).not.toHaveBeenCalled()
+    })
+
+    it('does not send anonymous requests when every stored QQ account is cooling down', async () => {
+        const account = { id: 'qq-all-cooling', platform: 'tencent', isActive: true, isValid: true, tencentCooldownUntil: Date.now() + 3600000 }
+        vi.spyOn(store, 'getCookies').mockReturnValue([account])
+        const handle = vi.fn()
+        vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle })
+        const ctx = { req: { query: () => ({ server: 'tencent', type: 'url', id: 'song' }), header: () => '' }, status: vi.fn(), json: vi.fn(value => value) }
+        expect(await api(ctx)).toEqual({ error: 'no url' })
+        expect(ctx.status).toHaveBeenCalledWith(403)
+        expect(handle).not.toHaveBeenCalled()
     })
 })

@@ -682,6 +682,32 @@ const getAdminHtml = () => `<!DOCTYPE html>
         .validation-status { display: flex; align-items: center; gap: 8px; }
         .user-info-tooltip { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
         .url-error-count { white-space: nowrap; }
+        .cookie-error-counts { display: flex; gap: 12px; }
+        .slider-error-count { white-space: nowrap; }
+        .tencent-verify-banner { padding: 20px 24px; margin-bottom: 20px; border: 1px solid var(--border); box-shadow: none; }
+        .tencent-verify-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+        .tencent-verify-title { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 650; }
+        .tencent-verify-icon { width: 20px; height: 20px; flex-shrink: 0; color: #92400e; }
+        .tencent-verify-count { font-size: 12px; color: #92400e; background: var(--warning-bg); padding: 5px 10px; border-radius: var(--radius-sm); white-space: nowrap; }
+        .tencent-verify-description { margin-top: 6px; font-size: 13px; line-height: 1.6; color: var(--text-secondary); }
+        .tencent-verify-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 280px); gap: 24px; }
+        .tencent-verify-account { font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+        .tencent-verify-identity { margin-top: 5px; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+        .tencent-verify-message { margin: 12px 0; font-size: 13px; line-height: 1.6; color: var(--text-secondary); overflow-wrap: anywhere; }
+        .tencent-verify-stats { display: flex; flex-wrap: wrap; gap: 12px 28px; margin-bottom: 16px; }
+        .tencent-verify-stats dt { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+        .tencent-verify-stats dd { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+        .tencent-verify-selector label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+        .tencent-verify-selector select { width: 100%; padding: 10px 12px; color: var(--text); background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; font-size: 13px; }
+        .tencent-verify-selector select:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+        .tencent-verify-selector p { font-size: 12px; line-height: 1.7; color: var(--text-secondary); margin-top: 10px; }
+        .tencent-verify-banner .btn { min-height: 36px; }
+        @media (max-width: 640px) {
+            .tencent-verify-banner { padding: 16px; }
+            .tencent-verify-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+            .tencent-verify-header { flex-wrap: wrap; gap: 8px; }
+            .tencent-verify-stats { gap: 12px 20px; }
+        }
 
         .loading {
             display: inline-block;
@@ -994,14 +1020,35 @@ const getAdminHtml = () => `<!DOCTYPE html>
                 </div>
 
                 <div class="content-section" id="cookiesSection">
-                    <div class="card" id="tencentVerifyBanner" role="status" style="display:none;padding:16px;margin-bottom:16px;border:1px solid var(--warning);">
-                        <strong id="tencentVerifyHeading">QQ 音乐需要滑块验证</strong>
-                        <p id="tencentVerifyMessage" style="margin:8px 0;color:var(--text-secondary);"></p>
-                        <div class="form-group" id="tencentVerifySongGroup" style="display:none;max-width:360px;margin:8px 0 12px;"><label for="tencentVerifySongmid">歌曲 ID</label><input id="tencentVerifySongmid" type="text" placeholder="输入遇到播放失败的 QQ 音乐歌曲 ID"></div>
-                        <p style="margin-bottom:12px;color:var(--text-secondary);font-size:13px;">点击时会重新获取短期有效的验证页面，并在服务端浏览器中带当前 Cookie 打开；若未出现滑块，可能是歌曲权限等其他原因。</p>
-                        <div class="actions">
-                            <button type="button" class="btn btn-warning btn-sm" onclick="openTencentVerification()">打开滑块验证</button>
-                            <button type="button" class="btn btn-default btn-sm" id="tencentVerifyRetry" onclick="retryTencentVerification()">完成后重试</button>
+                    <div class="card tencent-verify-banner" id="tencentVerifyBanner" style="display:none;">
+                        <div class="tencent-verify-header">
+                            <div>
+                                <h3 class="tencent-verify-title"><svg class="tencent-verify-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 3 2 21h20L12 3Z" stroke-linejoin="round"/><path d="M12 9v5m0 3v1" stroke-linecap="round"/></svg><span id="tencentVerifyHeading">QQ 音乐需要滑块验证</span></h3>
+                                <p class="tencent-verify-description">查看受影响账号，完成验证后可提前恢复自动选用。</p>
+                            </div>
+                            <span class="tencent-verify-count" id="tencentVerifyCount" role="status"></span>
+                        </div>
+                        <div class="tencent-verify-layout">
+                            <div>
+                                <div class="tencent-verify-account" id="tencentVerifyAccount"></div>
+                                <div class="tencent-verify-identity" id="tencentVerifyIdentity"></div>
+                                <p class="tencent-verify-message" id="tencentVerifyMessage"></p>
+                                <dl class="tencent-verify-stats">
+                                    <div><dt>URL 获取失败</dt><dd id="tencentVerifyFailures"></dd></div>
+                                    <div><dt>累计滑块</dt><dd id="tencentVerifySliders"></dd></div>
+                                    <div><dt>冷却状态</dt><dd id="tencentVerifyCooldown"></dd></div>
+                                </dl>
+                                <div class="form-group" id="tencentVerifySongGroup" style="display:none;max-width:360px;margin:8px 0 12px;"><label for="tencentVerifySongmid">歌曲 ID</label><input id="tencentVerifySongmid" type="text" placeholder="输入遇到播放失败的 QQ 音乐歌曲 ID"></div>
+                                <div class="actions">
+                                    <button type="button" class="btn btn-primary btn-sm" id="tencentVerifyOpen" onclick="openTencentVerification()">打开滑块验证</button>
+                                    <button type="button" class="btn btn-default btn-sm" id="tencentVerifyRetry" onclick="retryTencentVerification()">完成后重试</button>
+                                </div>
+                            </div>
+                            <div class="tencent-verify-selector">
+                                <label for="tencentVerifyAccountSelect">待处理账号</label>
+                                <select id="tencentVerifyAccountSelect" onchange="selectTencentVerification(this.value)"></select>
+                                <p>仅验证选中的账号，不影响其他 Cookie。滑块触发后冷却 1 小时；普通播放失败不代表一定需要滑块验证。</p>
+                            </div>
                         </div>
                     </div>
                     <div class="card">
@@ -1379,6 +1426,7 @@ const getAdminHtml = () => `<!DOCTYPE html>
                 <button type="button" class="modal-close" aria-label="关闭验证窗口" onclick="closeTencentVerification()">&times;</button>
             </div>
             <div class="modal-body">
+                <p id="tencentVerifyModalAccount" class="tencent-verify-message"></p>
                 <p id="tencentVerifyStatus" role="status" style="margin-bottom:12px;color:var(--text-secondary);">正在加载官方验证页面…</p>
                 <img id="tencentVerifyImage" alt="QQ 音乐验证页面，可在图像上拖动滑块" draggable="false" style="width:400px;max-width:100%;height:auto;touch-action:none;user-select:none;display:block;margin:auto;">
             </div>
@@ -1701,7 +1749,8 @@ const getAdminHtml = () => `<!DOCTYPE html>
                     '<td>' + (cookie.note || '-') + '</td>' +
                     '<td><div class="validation-status">' + getValidationBadge(cookie) + '</div>' +
                     (vipAbilityText ? '<div class="user-info-tooltip">' + vipAbilityText + '</div>' : '') +
-                    '<div class="user-info-tooltip url-error-count">URL 获取失败：' + (cookie.urlErrorCount || 0) + ' 次</div>' +
+                    '<div class="user-info-tooltip cookie-error-counts"><span class="url-error-count">URL 获取失败：' + (cookie.urlErrorCount || 0) + ' 次</span>' +
+                    (cookie.platform === 'tencent' ? '<span class="slider-error-count">滑块：' + (cookie.tencentSliderCount || 0) + ' 次</span>' : '') + '</div>' +
                     (cookie.validationError ? '<div style="color:var(--danger);font-size:11px;">' + cookie.validationError + '</div>' : '') + '</td>' +
                     '<td>' + (cookie.isActive ? '<span class="status-dot status-active"></span>启用' : '<span class="status-dot status-inactive"></span>禁用') + '</td>' +
                     '<td>' + formatDate(cookie.createdAt) + '</td>' +
@@ -1716,21 +1765,49 @@ const getAdminHtml = () => `<!DOCTYPE html>
         };
 
         let tencentVerificationId = '';
+        let tencentVerifications = [];
+        let tencentVerifyOpening = false;
         let tencentVerifyTimer = null;
         let tencentVerifyImageUrl = '';
         let tencentVerifyBusy = false;
         let lastTencentPointerMove = 0;
         let tencentPointerQueue = Promise.resolve();
-        const loadTencentVerifications = async () => {
-            const res = await api('/admin/cookies/tencent-verifications');
-            const pending = res?.success ? res.data?.[0] : null;
-            const banner = document.getElementById('tencentVerifyBanner');
+        const selectTencentVerification = (id) => {
+            const pending = tencentVerifications.find(account => account.id === id);
+            const changed = tencentVerificationId !== (pending?.id || '');
             tencentVerificationId = pending?.id || '';
-            banner.style.display = pending ? 'block' : 'none';
             if (!pending) return;
+            document.getElementById('tencentVerifyAccountSelect').value = pending.id;
             document.getElementById('tencentVerifyHeading').textContent = pending.confirmed ? 'QQ 音乐需要滑块验证' : 'QQ 音乐 URL 多次获取失败，可能需要验证';
-            document.getElementById('tencentVerifyMessage').textContent = pending.songmid ? '歌曲 ' + pending.songmid + (pending.confirmed ? ' 触发验证。' : ' 连续获取失败。') : '旧记录未保存歌曲 ID，请填写一首播放失败的歌曲。';
+            document.getElementById('tencentVerifyAccount').textContent = pending.note || pending.nickname || '未备注账号';
+            const identity = [pending.nickname, pending.accountId ? 'QQ / 微信账号 ' + pending.accountId : '', '记录 ' + pending.id].filter(Boolean).join(' · ');
+            document.getElementById('tencentVerifyIdentity').textContent = identity;
+            document.getElementById('tencentVerifyModalAccount').textContent = (pending.note || pending.nickname || '未备注账号') + ' · ' + identity;
+            document.getElementById('tencentVerifyMessage').textContent = pending.songmid ? '歌曲 ' + pending.songmid + (pending.confirmed ? ' 触发滑块验证。' : ' 获取失败，请先检查歌曲权限或尝试验证。') : '旧记录未保存歌曲 ID，请填写一首播放失败的歌曲。';
+            document.getElementById('tencentVerifyFailures').textContent = (pending.urlErrorCount || 0) + ' 次';
+            document.getElementById('tencentVerifySliders').textContent = (pending.tencentSliderCount || 0) + ' 次';
+            const remaining = Number(pending.tencentCooldownUntil || 0) - Date.now();
+            const cooldown = document.getElementById('tencentVerifyCooldown');
+            cooldown.textContent = remaining > 0 ? '剩余 ' + Math.ceil(remaining / 60000) + ' 分钟' : '未在冷却';
+            cooldown.title = remaining > 0 ? '恢复时间：' + formatDate(pending.tencentCooldownUntil) : '';
             document.getElementById('tencentVerifySongGroup').style.display = pending.songmid ? 'none' : 'block';
+            if (changed) document.getElementById('tencentVerifySongmid').value = '';
+        };
+        const loadTencentVerifications = async () => {
+            if (tencentVerifyOpening || document.getElementById('tencentVerifyModal').classList.contains('show')) return;
+            const res = await api('/admin/cookies/tencent-verifications');
+            if (!res?.success || tencentVerifyOpening || document.getElementById('tencentVerifyModal').classList.contains('show')) return;
+            tencentVerifications = res.data || [];
+            document.getElementById('tencentVerifyBanner').style.display = tencentVerifications.length ? 'block' : 'none';
+            document.getElementById('tencentVerifyCount').textContent = tencentVerifications.length + ' 个账号待处理';
+            const selector = document.getElementById('tencentVerifyAccountSelect');
+            selector.replaceChildren(...tencentVerifications.map(account => {
+                const option = document.createElement('option');
+                option.value = account.id;
+                option.textContent = (account.note || account.nickname || '未备注账号') + ' · ' + (account.accountId || account.id);
+                return option;
+            }));
+            selectTencentVerification(tencentVerifications.some(account => account.id === tencentVerificationId) ? tencentVerificationId : tencentVerifications[0]?.id);
         };
 
         const refreshTencentVerificationFrame = async () => {
@@ -1758,15 +1835,27 @@ const getAdminHtml = () => `<!DOCTYPE html>
         };
 
         const openTencentVerification = async () => {
-            if (!tencentVerificationId) return;
-            document.getElementById('tencentVerifyStatus').textContent = '正在加载官方验证页面…';
-            const songmid = document.getElementById('tencentVerifySongmid').value.trim();
-            const res = await api('/admin/cookies/' + encodeURIComponent(tencentVerificationId) + '/verification/start', { method: 'POST', body: JSON.stringify({ songmid }) });
-            if (!res?.success) { showToast(res?.error || '验证窗口打开失败', 'error'); return; }
-            document.getElementById('tencentVerifyModal').classList.add('show');
-            await refreshTencentVerificationFrame();
-            clearInterval(tencentVerifyTimer);
-            tencentVerifyTimer = setInterval(refreshTencentVerificationFrame, 650);
+            if (!tencentVerificationId || tencentVerifyOpening) return;
+            tencentVerifyOpening = true;
+            const button = document.getElementById('tencentVerifyOpen');
+            button.disabled = true;
+            document.getElementById('tencentVerifyAccountSelect').disabled = true;
+            try {
+                document.getElementById('tencentVerifyStatus').textContent = '正在加载官方验证页面…';
+                const songmid = document.getElementById('tencentVerifySongmid').value.trim();
+                const res = await api('/admin/cookies/' + encodeURIComponent(tencentVerificationId) + '/verification/start', { method: 'POST', body: JSON.stringify({ songmid }) });
+                if (!res?.success) { showToast(res?.error || '验证窗口打开失败', 'error'); return; }
+                document.getElementById('tencentVerifyModal').classList.add('show');
+                await refreshTencentVerificationFrame();
+                clearInterval(tencentVerifyTimer);
+                tencentVerifyTimer = setInterval(refreshTencentVerificationFrame, 650);
+            } catch {
+                showToast('验证窗口打开失败，请稍后重试', 'error');
+            } finally {
+                tencentVerifyOpening = false;
+                button.disabled = false;
+                document.getElementById('tencentVerifyAccountSelect').disabled = false;
+            }
         };
 
         const closeTencentVerification = async () => {
@@ -1811,7 +1900,7 @@ const getAdminHtml = () => `<!DOCTYPE html>
                 const res = await api('/admin/cookies/' + encodeURIComponent(tencentVerificationId) + '/retry-play', { method: 'POST' });
                 showToast(res?.success ? '验证已生效，请重新播放歌曲' : (res?.error || '重试失败'), res?.success ? 'success' : 'error');
                 if (res?.success && document.getElementById('tencentVerifyModal').classList.contains('show')) await closeTencentVerification();
-                await loadTencentVerifications();
+                await loadCookies();
             } finally {
                 button.disabled = false;
             }

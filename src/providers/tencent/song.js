@@ -171,7 +171,8 @@ const fetchVkeyUrl = async (songmid, mediaMid, typeObj, uin, authst, cookie) => 
     const info = result?.req_0?.data?.midurlinfo?.[0]
     const purl = info?.purl || ''
 
-    const verificationRequired = result?.req_0?.code === 104009 || result?.req_0?.data?.retcode === 104009
+    const verificationRequired = [result?.code, result?.req_0?.code, result?.req_0?.data?.retcode, info?.result]
+        .some(code => Number(code) === 104009)
     if (verificationRequired) {
         try {
             const validUrl = new URL(String(result.req_0.data.validUrl).replace(/\\([:/_])/g, '$1'))
@@ -274,7 +275,7 @@ export const get_song_url = async (id, cookie = '', options = {}) => {
 
         try {
             const { url, verificationRequired } = await fetchVkeyUrl(songmid, mediaMid, typeObj, uin, authst, cookie)
-            if (verificationRequired) break
+            if (verificationRequired) return { url: '', verificationRequired: true }
             if (!url) continue
 
             const ok = await isPlayableUrl(url)
