@@ -212,6 +212,7 @@ export const map_song_list = (song_list) => {
         const artists = song.ar || song.artists
         return {
             title: song.name,
+            album: song.al?.name || song.album?.name || '',
             author: artists.reduce((i, v) => ((i ? i + " / " : i) + v.name), ''),
             pic: song?.al?.picUrl || song.id,
             url: song.id,

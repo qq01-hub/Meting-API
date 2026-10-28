@@ -1,6 +1,17 @@
 # OpenMusic 服务端授权
 
-音乐入口 `/api`、`/test`、`/admin/openmusic`、`/admin/fm` 和 `/audio/qishui` 现在同时要求 API Token 与 OpenMusic 服务端短期签名，裸请求或仅 `Authorization: Bearer` 请求均不能获取音乐响应
+音乐入口 `/api`、`/test`、`/admin/openmusic`、`/admin/fm` 和 `/audio/qishui` 默认同时要求 API Token 与 OpenMusic 服务端短期签名，裸请求或仅 `Authorization: Bearer` 请求均不能获取音乐响应
+
+## 授权开关
+
+管理员可在管理后台的「设置 → OpenMusic 授权」中开启或关闭「启用 OpenMusic 授权校验」，保存后立即生效，无需重启
+
+- 配置字段为 `openmusicAuthEnabled`，默认开启，旧配置未包含此字段时仍按开启处理
+- 开启时保留完整的断言、签名、时效及 nonce 防重放校验
+- 关闭时不要求或校验 `X-OpenMusic-Assertion`、`X-OpenMusic-Signature`，即使携带无效值也会忽略，但仍必须提供有效的 `Authorization: Bearer <API Token>`，不开放匿名访问
+- 开关统一作用于所有使用 API Token 的程序化入口，包括音乐、汽水音频和管理接口，管理员独立会话登录不受影响，请仅在可信环境中关闭
+- 配置通过 `PUT /admin/config/openmusic-auth` 保存，请求体为 `{"enabled":false}` 或 `{"enabled":true}`，沿用管理接口鉴权规则
+- 设置保存到数据目录的 `config.json`，重启后保留
 
 ## 接入
 
@@ -23,7 +34,7 @@
 
 ## 汽水代理边界
 
-播放 token 不是独立授权凭证，音频与 `mode=source` 同样必须通过 API Token 和短期签名
+播放 token 不是独立授权凭证，音频与 `mode=source` 同样必须通过 API Token，授权开关开启时还需短期签名
 
 汽水源地址只接受无用户信息、无非默认端口、无 fragment 的 HTTPS `*.douyinvod.com` 地址，禁止任意域名、IP 字面量与自动重定向，地址在创建播放 token、读取缓存及返回源地址前重新校验，单次下载时限 60 秒、最大 128 MiB
 
@@ -31,7 +42,7 @@
 
 白名单不是 DNS 固定解析或出站防火墙，部署仍需阻断内网、链路本地与云元数据目的地址，并防止受信域名被内部 DNS 重写
 
-所有使用 Bearer 的程序化入口，包括 Cookie 池、扫码、取链和 Token 管理接口，统一要求 OpenMusic 短期断言，不能仅凭裸 Bearer 借管理路径调用音乐服务或获取凭据
+所有使用 Bearer 的程序化入口，包括 Cookie 池、扫码、取链和 Token 管理接口，在授权开关开启时统一要求 OpenMusic 短期断言，不能仅凭裸 Bearer 借管理路径调用音乐服务或获取凭据
 
 管理员通过用户名与会话 Token 登录管理后台的独立方式保留，注销必须先通过认证且仅使用已认证身份，不能匿名指定其他用户名使其下线
 
@@ -43,6 +54,6 @@ Meting 信任 OpenMusic 服务端签名，实际登录状态、账户额度、IP
 
 端口只绑定回环地址或容器私网，管理使用 SSH 隧道或独立受控入口，移除公网直接访问 Meting 的反代与端口映射，签名不是防火墙的替代品
 
-该变更需要重启 Meting，不变更现有 Cookie 文件或管理数据格式，API 示例仅表示参数格式，不再意味着匿名或仅 Bearer 可用，旧客户端需升级，不能通过关闭鉴权恢复兼容
+升级代码后需要重启 Meting，后续切换授权开关无需重启，不变更现有 Cookie 文件，API 示例仅表示参数格式，不意味着匿名可用，旧客户端建议升级，确需兼容仅 Bearer 的客户端时可在可信环境中关闭 OpenMusic 授权校验
 
-回滚时必须与 OpenMusic 配套，不可让旧版不签名的 OpenMusic 对接新版强制签名的 Meting，不能删除用户 Cookie 或管理数据来尝试恢复，完整运营说明见 OpenMusic 的 `docs/ACCOUNT_RISK_CONTROL.md`
+回滚时必须与 OpenMusic 配套，旧版不签名的 OpenMusic 无法对接授权开关开启的 Meting，不能删除用户 Cookie 或管理数据来尝试恢复，完整运营说明见 OpenMusic 的 `docs/ACCOUNT_RISK_CONTROL.md`

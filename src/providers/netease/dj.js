@@ -50,6 +50,7 @@ export const map_program_list = (programs = []) => {
         return {
             title: program.name || song.name || '',
             author,
+            album: song.al?.name || song.album?.name || '',
             pic: program.coverUrl || song.album?.picUrl || songId,
             url: songId,
             lrc: songId,

@@ -3,6 +3,7 @@ import { fetchQQSearch } from "./search_api.js"
 export const map_song_list = (songs = []) => {
     return songs.map(song => ({
         title: song.name,
+        album: song.album?.name || '',
         author: (song.singer || []).reduce((i, v) => ((i ? i + " / " : i) + v.name), ''),
         pic: song.album?.mid
             ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${song.album.mid}.jpg`

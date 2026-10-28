@@ -20,6 +20,7 @@ const map_song = (song) => {
     return {
         author: (song.singer || []).reduce((i, v) => ((i ? i + " / " : i) + v.name), ''),
         title: song.songname || song.name || song.title || '',
+        album: song.albumname || song.album?.name || '',
         pic: albummid ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${albummid}.jpg` : '',
         url: config.OVERSEAS ? '' : songmid,
         lrc: songmid,

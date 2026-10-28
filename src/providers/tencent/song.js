@@ -332,6 +332,7 @@ export const get_song_info = async (id, cookie = '') => {
     let song_info = {
         author: result.track_info.singer.reduce((i, v) => ((i ? i + " / " : i) + v.name), ''),
         title: result.track_info.name,
+        album: result.track_info.album?.name || '',
         pic: `https://y.gtimg.cn/music/photo_new/T002R300x300M000${result.track_info.album.mid}.jpg`,
         url: config.OVERSEAS ? ((await get_song_url(id))?.url || '') : id,
         lrc: id,

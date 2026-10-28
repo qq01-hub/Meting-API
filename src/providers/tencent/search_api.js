@@ -82,7 +82,7 @@ export const fetchQQSearch = async (query, searchType, cookie = '') => {
     const songs = (legacy?.data?.song?.list || []).map((song) => ({
         name: song.songname,
         singer: song.singer || [],
-        album: { mid: song.albummid || '' },
+        album: { mid: song.albummid || '', name: song.albumname || '' },
         mid: song.songmid,
         interval: song.interval,
     }))

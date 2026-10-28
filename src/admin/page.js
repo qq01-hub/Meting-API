@@ -1266,6 +1266,17 @@ const getAdminHtml = () => `<!DOCTYPE html>
                             </form>
                         </div>
 
+                        <div class="card settings-section" id="openmusicAuthSection">
+                            <h4>OpenMusic 授权</h4>
+                            <form id="openmusicAuthForm">
+                                <div class="form-group">
+                                    <label class="checkbox-label"><input type="checkbox" id="openmusicAuthEnabled" aria-describedby="openmusicAuthHelp" checked> 启用 OpenMusic 授权校验</label>
+                                    <small id="openmusicAuthHelp">默认开启，校验 OpenMusic 断言、签名及防重放参数<br>关闭后不校验 OpenMusic 参数，但仍需有效的 API Token，请仅在可信环境中关闭<br>保存后立即生效，无需重启</small>
+                                </div>
+                                <button type="submit" class="btn btn-primary">保存授权设置</button>
+                            </form>
+                        </div>
+
                         <div class="card settings-section" id="adminPathSection">
                             <h4>🛡️ 安全设置</h4>
                             <form id="adminPathForm">
@@ -1673,6 +1684,7 @@ const getAdminHtml = () => `<!DOCTYPE html>
                 currentUserRole = checkRes.data.role;
                 if (currentUserRole !== 'admin') {
                     document.getElementById('adminPathSection').style.display = 'none';
+                    document.getElementById('openmusicAuthSection').style.display = 'none';
                     return;
                 }
             }
@@ -1681,6 +1693,8 @@ const getAdminHtml = () => `<!DOCTYPE html>
                 if (res.data?.adminPath) {
                     document.getElementById('adminPathInput').value = res.data.adminPath;
                 }
+                document.getElementById('openmusicAuthSection').style.display = '';
+                document.getElementById('openmusicAuthEnabled').checked = res.data?.openmusicAuthEnabled !== false;
                 document.getElementById('qishuiSignerUrl').value = res.data?.qishuiSignerUrl || '';
                 document.getElementById('loudnessServiceUrl').value = res.data?.loudnessServiceUrl || '';
             }
@@ -2560,6 +2574,25 @@ const getAdminHtml = () => `<!DOCTYPE html>
             const res = await api('/admin/password', { method: 'PUT', body: JSON.stringify({ oldPassword, newPassword }) });
             if (res?.success) { showToast('密码已修改'); document.getElementById('changePasswordForm').reset(); }
             else showToast(res?.error || '修改失败', 'error');
+        });
+
+        document.getElementById('openmusicAuthForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const button = e.currentTarget.querySelector('button[type="submit"]');
+            const enabled = document.getElementById('openmusicAuthEnabled').checked;
+            button.disabled = true;
+            try {
+                const res = await api('/admin/config/openmusic-auth', { method: 'PUT', body: JSON.stringify({ enabled }) });
+                if (res?.success) {
+                    document.getElementById('openmusicAuthEnabled').checked = res.data.openmusicAuthEnabled;
+                    showToast('OpenMusic 授权设置已保存');
+                } else {
+                    showToast(res?.error || '保存失败', 'error');
+                    await loadConfig();
+                }
+            } finally {
+                button.disabled = false;
+            }
         });
 
         document.getElementById('adminPathForm').addEventListener('submit', async (e) => {

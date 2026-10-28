@@ -17,7 +17,9 @@ export const apiTokenMiddleware = async (c, next) => {
     c.header('Cache-Control', 'no-store, private')
     const reject = (code = 'OPENMUSIC_AUTH_REQUIRED') => c.json({ success: false, error: '需要 OpenMusic 服务端授权，请登录 OpenMusic 后重试', code }, code === 'OPENMUSIC_AUTH_BUSY' ? 503 : 401)
     const apiToken = extractBearerToken(c.req.header('Authorization'))
-    if (!apiToken || !c.req.header('X-OpenMusic-Assertion') || !c.req.header('X-OpenMusic-Signature')) return reject()
+    const openmusicAuthEnabled = store.isOpenmusicAuthEnabled()
+    if (!apiToken) return reject()
+    if (openmusicAuthEnabled && (!c.req.header('X-OpenMusic-Assertion') || !c.req.header('X-OpenMusic-Signature'))) return reject()
 
     const result = store.validateApiToken(apiToken)
     if (!result.valid) return reject()
@@ -48,10 +50,12 @@ export const apiTokenMiddleware = async (c, next) => {
             return c.json({ success: false, error: '请求体无效或超过限制', code }, tooLarge ? 413 : signal.aborted ? 408 : 400)
         }
     }
-    const assertion = verifyMetingAssertion({ secret: apiToken, url: c.req.url, headers: c.req.raw.headers, method: c.req.method, body })
-    if (!assertion.ok) return reject(assertion.code)
-    c.set('openmusicAccountId', assertion.accountId)
-    c.set('openmusicPurpose', assertion.purpose)
+    if (openmusicAuthEnabled) {
+        const assertion = verifyMetingAssertion({ secret: apiToken, url: c.req.url, headers: c.req.raw.headers, method: c.req.method, body })
+        if (!assertion.ok) return reject(assertion.code)
+        c.set('openmusicAccountId', assertion.accountId)
+        c.set('openmusicPurpose', assertion.purpose)
+    }
     applyApiTokenContext(c, result.tokenData)
     try {
         return await next()

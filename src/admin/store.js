@@ -1141,6 +1141,7 @@ class DataStore {
 
     getConfig() {
         return {
+            openmusicAuthEnabled: this.isOpenmusicAuthEnabled(),
             adminPath: this.config.adminPath || null,
             webhookUrl: this.config.webhookUrl || null,
             monitorEnabled: this.config.monitorEnabled || false,
@@ -1149,6 +1150,18 @@ class DataStore {
             loudnessServiceUrl: this.config.loudnessServiceUrl || null,
             fmPriorityCookieIds: { ...(this.config.fmPriorityCookieIds || {}) },
         }
+    }
+
+    isOpenmusicAuthEnabled() {
+        return this.config.openmusicAuthEnabled !== false
+    }
+
+    async setOpenmusicAuthEnabled(enabled, operator = 'system') {
+        if (typeof enabled !== 'boolean') return { success: false, error: 'OpenMusic 授权开关必须是布尔值' }
+        this.config.openmusicAuthEnabled = enabled
+        await this.addLog('config_update', `${enabled ? '开启' : '关闭'} OpenMusic 授权校验`, operator)
+        await this.saveToFile()
+        return { success: true, data: { openmusicAuthEnabled: enabled } }
     }
 
     getQishuiSignerUrl() {
