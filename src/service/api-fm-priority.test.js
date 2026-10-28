@@ -7,6 +7,62 @@ import { getTencentVerification } from '../providers/tencent/song.js'
 describe('FM account selection', () => {
     afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
+    it.each(['netease', 'tencent', 'qishui', 'kugou'])('%s keeps a non-VIP FM account for lists but uses a VIP account for default URL quality', async (server) => {
+        const fm = { id: 'fm', platform: server, cookie: 'FM_COOKIE', isActive: true, isValid: true, updatedAt: 2, userInfo: { canPlayVip: false } }
+        const vip = { id: 'vip', platform: server, cookie: 'VIP_COOKIE', source: 'contribution', isActive: true, isValid: true, updatedAt: 1, userInfo: { canPlayVip: true } }
+        vi.spyOn(store, 'getCookies').mockReturnValue([fm, vip])
+        vi.spyOn(store, 'getFmPriorityCookieId').mockReturnValue('fm')
+        vi.spyOn(store, 'recordCookieUrlSuccess').mockResolvedValue()
+        const handle = vi.fn(async (type) => type === 'fm'
+            ? [{ url: 'roaming-song', pic: '', lrc: '' }]
+            : { url: 'https://example.com/song.mp3' })
+        vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['fm', 'url'], handle })
+        const context = (query, explicit = '') => ({
+            req: { url: 'http://localhost/api', query: () => ({ server, ...query }), header: () => explicit },
+            json: vi.fn(value => value), status: vi.fn(), redirect: vi.fn(url => ({ url })),
+        })
+
+        const [song] = await api(context({ type: 'fm' }))
+        expect(handle).toHaveBeenLastCalledWith('fm', '6907557348', 'FM_COOKIE', expect.any(Object))
+        const query = Object.fromEntries(new URL(song.url).searchParams)
+        expect(query).toMatchObject({ type: 'url', id: 'roaming-song', fm: '1' })
+        expect((await api(context({ ...query, redirect: '1' }))).url).toBe('https://example.com/song.mp3')
+        expect(handle).toHaveBeenLastCalledWith('url', 'roaming-song', 'VIP_COOKIE', expect.any(Object))
+        await api(context({ ...query, redirect: '1' }, 'EXPLICIT_COOKIE'))
+        expect(handle).toHaveBeenLastCalledWith('url', 'roaming-song', 'EXPLICIT_COOKIE', expect.any(Object))
+    })
+
+    describe.each(['netease', 'tencent', 'qishui', 'kugou'])('%s URL requests exclude free accounts', (server) => {
+        it.each([undefined, 'standard', '320', 'master'])('selects a VIP for ordinary URL requests with quality=%s', async (requestedQuality) => {
+            const quality = requestedQuality === 'master'
+                ? ({ netease: 'jymaster', qishui: 'studio' }[server] || 'master')
+                : requestedQuality
+            const free = { id: 'free', platform: server, cookie: 'FREE_COOKIE', isActive: true, isValid: true, updatedAt: 2, userInfo: { isVip: false } }
+            const vip = { id: 'vip', platform: server, cookie: 'VIP_COOKIE', source: 'contribution', isActive: true, isValid: true, userInfo: { canPlayVip: true, canPlaySvip: true } }
+            vi.spyOn(store, 'getCookies').mockReturnValue([free, vip])
+            vi.spyOn(store, 'recordCookieUrlSuccess').mockResolvedValue()
+            const handle = vi.fn().mockResolvedValue({ url: 'https://example.com/song.mp3' })
+            vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle })
+            const ctx = {
+                req: { query: () => ({ server, type: 'url', id: 'song', quality, redirect: '1' }), header: () => '' },
+                json: vi.fn(value => value), status: vi.fn(), redirect: vi.fn(url => ({ url })),
+            }
+            expect((await api(ctx)).url).toBe('https://example.com/song.mp3')
+            expect(handle).toHaveBeenCalledWith('url', 'song', 'VIP_COOKIE', expect.any(Object))
+        })
+
+        it.each([undefined, '1'])('does not request a URL when only free accounts remain, fm=%s', async (fm) => {
+            const free = { id: 'free', platform: server, cookie: 'FREE_COOKIE', isActive: true, isValid: true, userInfo: { isVip: false } }
+            vi.spyOn(store, 'getCookies').mockReturnValue([free])
+            const handle = vi.fn()
+            vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle })
+            const ctx = { req: { query: () => ({ server, type: 'url', id: 'song', fm }), header: () => '' }, json: vi.fn(value => value), status: vi.fn() }
+            expect(await api(ctx)).toEqual({ error: 'no url' })
+            expect(ctx.status).toHaveBeenCalledWith(403)
+            expect(handle).not.toHaveBeenCalled()
+        })
+    })
+
     it('uses the FM account for IDs and SVIP account for URLs even after a URL failure', async () => {
         const fmCookie = { id: 'fm', cookie: 'FM_COOKIE', isValid: true, fmPriority: true, userInfo: { canPlayVip: true } }
         const svipCookie = { id: 'svip', cookie: 'SVIP_COOKIE', isValid: true, userInfo: { canPlaySvip: true } }
@@ -79,7 +135,7 @@ describe('FM account selection', () => {
     it('remembers the failed Tencent song for verification after three URL failures', async () => {
         const account = { id: 'tencent-failure-test', platform: 'tencent', cookie: 'uin=123;qqmusic_key=test', isValid: true, isActive: true, urlErrorCount: 2 }
         store.cookies.set(account.id, account)
-        vi.spyOn(store, 'getActiveCookie').mockReturnValue(account)
+        vi.spyOn(store, 'getActiveCookieForQuality').mockReturnValue(account)
         vi.spyOn(store, 'getFallbackCookieForQuality').mockReturnValue(null)
         vi.spyOn(store, 'saveToFile').mockResolvedValue()
         vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle: vi.fn().mockResolvedValue(null) })
@@ -95,7 +151,7 @@ describe('FM account selection', () => {
     it('persists a Tencent slider flag after the temporary challenge link expires', async () => {
         const account = { id: 'tencent-slider-api-test', platform: 'tencent', cookie: 'uin=456;qqmusic_key=test', isValid: true, isActive: true }
         store.cookies.set(account.id, account)
-        vi.spyOn(store, 'getActiveCookie').mockReturnValue(account)
+        vi.spyOn(store, 'getActiveCookieForQuality').mockReturnValue(account)
         vi.spyOn(store, 'getFallbackCookieForQuality').mockReturnValue(null)
         vi.spyOn(store, 'saveToFile').mockResolvedValue()
         vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -117,7 +173,7 @@ describe('FM account selection', () => {
     it('clears the stored slider prompt after Tencent playback succeeds', async () => {
         const account = { id: 'tencent-recovery-test', platform: 'tencent', cookie: 'uin=789;qqmusic_key=test', isValid: true, isActive: true, urlErrorCount: 3, lastFailedSongmid: 'old', tencentVerificationSongmid: 'old' }
         store.cookies.set(account.id, account)
-        vi.spyOn(store, 'getActiveCookie').mockReturnValue(account)
+        vi.spyOn(store, 'getActiveCookieForQuality').mockReturnValue(account)
         vi.spyOn(store, 'saveToFile').mockResolvedValue()
         vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle: vi.fn().mockResolvedValue({ url: 'https://example.com/song.mp3' }) })
         const ctx = { req: { query: () => ({ server: 'tencent', type: 'url', id: 'new' }), header: () => '' }, status: vi.fn(), json: vi.fn(value => value) }
@@ -162,7 +218,7 @@ describe('FM account selection', () => {
     })
 
     it('handles QQ exceptions and exhausts backups without looping or retrying the same Cookie', async () => {
-        const accounts = [3, 2, 1].map(number => ({ id: `qq-exhaust-${number}`, platform: 'tencent', cookie: `uin=${number}`, isActive: true, isValid: true, updatedAt: number }))
+        const accounts = [3, 2, 1].map(number => ({ id: `qq-exhaust-${number}`, platform: 'tencent', cookie: `uin=${number}`, isActive: true, isValid: true, updatedAt: number, userInfo: { canPlayVip: true } }))
         const duplicate = { ...accounts[0], id: 'qq-duplicate', updatedAt: 0 }
         accounts.forEach(account => store.cookies.set(account.id, account))
         vi.spyOn(store, 'getCookies').mockReturnValue([...accounts, duplicate])

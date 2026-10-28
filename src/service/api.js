@@ -49,7 +49,7 @@ export default async (ctx) => {
     if (!explicitCookie) {
         if (type === 'fm') {
             storedCookie = store.getActiveCookieForFm(server)
-        } else if (type === 'url' && (quality || query.fm === '1')) {
+        } else if (type === 'url') {
             storedCookie = store.getActiveCookieForQuality(server, quality || 'standard', query.fm === '1')
         } else {
             storedCookie = store.getActiveCookie(server)
@@ -57,8 +57,7 @@ export default async (ctx) => {
     }
 
     cookie = selectRequestCookie(explicitCookie, storedCookie)
-    if (server === 'tencent' && type === 'url' && !explicitCookie && !storedCookie
-        && store.getCookies(server).some(account => account.isActive && account.isValid !== false)) {
+    if (type === 'url' && !explicitCookie && !storedCookie) {
         ctx.status(403)
         return ctx.json({ error: 'no url' })
     }

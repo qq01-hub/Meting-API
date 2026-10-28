@@ -46,6 +46,70 @@ describe('Meting 全局 Cookie 优先级', () => {
         expect(selectCookieForQuality([fmCookie, vipCookie], '320', 'netease', true)).toBe(vipCookie)
     })
 
+    describe.each(['netease', 'tencent', 'qishui', 'kugou'])('%s 非会员 FM 账号仅用于列表', (platform) => {
+        it.each(['standard', '128', undefined])('默认或标准音质 %s 使用其他会员账号', (quality) => {
+            const fm = { ...cookie('FM账号', { isVip: false, canPlayVip: false }, 3), fmPriority: true }
+            const vip = cookie('contribution:vip', { canPlayVip: true }, 1)
+            const free = cookie('普通非会员', { isVip: false }, 2)
+
+            expect(selectFmCookie([fm, vip, free])).toBe(fm)
+            expect(selectCookieForQuality([fm, vip, free], quality, platform, true)).toBe(vip)
+        })
+
+        it('仅有非会员 FM 优先账号时不将该账号用于播放', () => {
+            const fm = { ...cookie('FM账号', { canPlayVip: false }), fmPriority: true }
+            expect(selectCookieForQuality([fm], 'standard', platform, true)).toBeNull()
+        })
+
+        it('没有会员账号时不使用任何非会员账号尝试播放', () => {
+            const fm = { ...cookie('FM账号', { canPlayVip: false }, 2), fmPriority: true }
+            const free = cookie('普通非会员', { canPlayVip: false }, 1)
+            expect(selectCookieForQuality([fm, free], 'standard', platform, true)).toBeNull()
+        })
+
+        it('播放失败回退也不会重新选中仅用于列表的非会员 FM 账号', () => {
+            const fm = { id: 'fm', platform, cookie: 'FM', isActive: true, isValid: true, userInfo: { canPlayVip: false } }
+            const vip = { id: 'vip', platform, cookie: 'VIP', isActive: true, isValid: true, userInfo: { canPlayVip: true } }
+            const getCookies = vi.spyOn(store, 'getCookies').mockReturnValue([fm, vip])
+            const priority = vi.spyOn(store, 'getFmPriorityCookieId').mockReturnValue('fm')
+            try {
+                expect(store.getFallbackCookieForQuality(platform, 'standard', 'vip')).toBeNull()
+            } finally {
+                getCookies.mockRestore()
+                priority.mockRestore()
+            }
+        })
+
+        it('普通非 FM 播放请求也跳过非会员账号', () => {
+            const fm = { ...cookie('FM账号', { canPlayVip: false }, 2), fmPriority: true }
+            const vip = cookie('contribution:vip', { canPlayVip: true }, 1)
+            expect(selectCookieForQuality([fm, vip], 'standard', platform)).toBe(vip)
+        })
+    })
+
+    describe.each(['netease', 'tencent', 'qishui', 'kugou'])('%s 播放账号必须具备会员权益', (platform) => {
+        it.each([false, true])('所有音质与缺失会员信息都不选非会员账号，FM=%s', (preferFm) => {
+            const accounts = [cookie('非会员', { isVip: false }), cookie('无权益信息')]
+            accounts.push({ note: '尚未验证会员' })
+            for (const quality of [undefined, 'standard', '128', '320', 'lossless', 'master']) {
+                expect(selectCookieForQuality(accounts, quality, platform, preferFm)).toBeNull()
+            }
+        })
+
+        it('普通播放失败后不回退到非会员账号', () => {
+            const getCookies = vi.spyOn(store, 'getCookies').mockReturnValue([
+                { id: 'free', platform, isActive: true, isValid: true, userInfo: { isVip: false } },
+                { id: 'unknown', platform, isActive: true, isValid: true },
+            ])
+            try {
+                expect(store.getFallbackCookieForQuality(platform, 'standard', 'vip')).toBeNull()
+                expect(store.getActiveCookieForFm(platform)?.id).toBe('free')
+            } finally {
+                getCookies.mockRestore()
+            }
+        })
+    })
+
     it('显式指定 Cookie 时不使用 FM 优先账号', () => {
         const explicitCookie = 'MUSIC_U=explicit'
         const fmCookie = cookie('FM账号')

@@ -75,7 +75,9 @@ const cookieCanPlayRequirement = (cookie, requirement) => {
 }
 
 export const selectCookieForQuality = (cookies, quality, platform, preferFm = false) => {
-    const available = [...cookies].filter(isCookieAvailable)
+    // 所有播放链接请求仅使用已确认具备会员权益的账号，非会员仍可获取漫游列表
+    const available = [...cookies].filter(cookie => isCookieAvailable(cookie)
+        && cookie.userInfo && cookieCanPlayRequirement(cookie, 'VIP'))
     if (!available.length) return null
     const requirement = getQualityRequirement(quality, platform)
     const fmCookie = preferFm ? selectFmCookie(available) : null
@@ -693,6 +695,7 @@ class DataStore {
         const requirement = getQualityRequirement(quality, platform)
         const cookies = this.getCookies(platform).filter(cookie =>
             !excludedIds.has(cookie.id) && !excludedCookies.has(cookie.cookie) && cookie.isActive && isCookieAvailable(cookie)
+            && cookie.userInfo && cookieCanPlayRequirement(cookie, 'VIP')
             && (platform === 'tencent' || (cookie.userInfo && cookieCanPlayRequirement(cookie, requirement))))
         if (platform === 'tencent') return selectCookieForQuality(cookies, quality, platform)
         return selectActiveCookie(cookies)
