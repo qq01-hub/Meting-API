@@ -682,8 +682,8 @@ const getAdminHtml = () => `<!DOCTYPE html>
         .validation-status { display: flex; align-items: center; gap: 8px; }
         .user-info-tooltip { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
         .url-error-count { white-space: nowrap; }
-        .cookie-error-counts { display: flex; gap: 12px; }
-        .slider-error-count { white-space: nowrap; }
+        .cookie-error-counts { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; line-height: 1.4; }
+        .url-error-count, .slider-error-count { display: block; white-space: nowrap; }
         .tencent-verify-banner { padding: 20px 24px; margin-bottom: 20px; border: 1px solid var(--border); box-shadow: none; }
         .tencent-verify-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
         .tencent-verify-title { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 650; }

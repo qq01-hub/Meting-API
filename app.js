@@ -28,6 +28,7 @@ app.use('*', async (context, next) => {
         try { response = (await context.res.clone().text()).slice(0, 2000) } catch {}
         try {
             const apiLogContext = context.get('apiLogContext') || {}
+            const internalError = context.get('httpError') || ''
             await store.addApiLog({
                 method: context.req.method,
                 path,
@@ -35,7 +36,7 @@ app.use('*', async (context, next) => {
                 level: 'error',
                 platform: apiLogContext.platform || '',
                 cookieId: apiLogContext.cookieId || '',
-                error: response,
+                error: internalError || response,
             })
         } catch (error) {
             console.error('[HTTP] 接口日志写入失败', error?.message || error)
@@ -47,6 +48,7 @@ app.use('*', async (context, next) => {
 app.onError((error, c) => {
     const invalid = error instanceof SyntaxError || error?.status === 400
     const status = invalid ? 400 : 500
+    c.set('httpError', error?.message || (invalid ? '请求格式无效' : '服务请求失败'))
     console.error('[HTTP]', c.req.method, invalid ? 'INVALID_REQUEST' : 'INTERNAL_ERROR')
     return c.json({ success: false, error: invalid ? '请求格式无效' : '服务请求失败', code: invalid ? 'INVALID_REQUEST' : 'INTERNAL_ERROR' }, status)
 })

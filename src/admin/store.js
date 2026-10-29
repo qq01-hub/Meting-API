@@ -26,6 +26,7 @@ const API_LOGS_FILE = 'api_logs.json'
 const API_TOKENS_FILE = 'api_tokens.json'
 const COOKIE_KEY_FILE = 'cookie-encryption.key'
 const COOKIE_ENCRYPTION_PREFIX = 'enc:v1:'
+const API_LOG_DEDUPE_WINDOW_MS = 10 * 1000
 
 const MAX_LOGIN_ATTEMPTS = 5
 const LOCKOUT_DURATION = 15 * 60 * 1000
@@ -665,11 +666,11 @@ class DataStore {
             cookies = cookies.filter(c => c.platform === platform)
         }
         return cookies.sort((a, b) => {
+            const membershipRank = Number(cookieHasMembership(a)) - Number(cookieHasMembership(b))
+            if (membershipRank) return membershipRank
             const platformRank = (COOKIE_PLATFORM_ORDER[a.platform] ?? Number.MAX_SAFE_INTEGER)
                 - (COOKIE_PLATFORM_ORDER[b.platform] ?? Number.MAX_SAFE_INTEGER)
             if (platformRank) return platformRank
-            const membershipRank = Number(cookieHasMembership(a)) - Number(cookieHasMembership(b))
-            if (membershipRank) return membershipRank
             return Number(b.createdAt || 0) - Number(a.createdAt || 0)
         })
     }
@@ -1385,6 +1386,19 @@ class DataStore {
             id: this.generateId(),
             timestamp: Date.now(),
             ...logData,
+        }
+        const canDeduplicate = Boolean(log.platform && log.cookieId && log.error)
+        if (canDeduplicate) {
+            const duplicate = this.apiLogs.find(existing =>
+                existing.platform === log.platform
+                && existing.cookieId === log.cookieId
+                && existing.path === log.path
+                && existing.status === log.status
+                && existing.code === log.code
+                && existing.error === log.error
+                && log.timestamp - Number(existing.timestamp || 0) <= API_LOG_DEDUPE_WINDOW_MS
+            )
+            if (duplicate) return duplicate
         }
         this.apiLogs.push(log)
         await this.saveToFile()

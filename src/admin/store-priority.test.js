@@ -4,6 +4,21 @@ import store, { selectActiveCookie, selectFmCookie, selectCookieForQuality, sele
 const cookie = (note, userInfo = {}, updatedAt = 1) => ({ note, userInfo, updatedAt })
 
 describe('Meting 全局 Cookie 优先级', () => {
+    it('同一时间窗口内相同账号错误日志只保留一条', async () => {
+        const save = vi.spyOn(store, 'saveToFile').mockResolvedValue()
+        const originalLogs = store.apiLogs
+        store.apiLogs = []
+        try {
+            const log = { method: 'GET', path: '/api', status: 403, platform: 'netease', cookieId: 'same-account', code: 'URL_EMPTY_RESULT', error: '账号未返回播放链接' }
+            await store.addApiLog(log)
+            await store.addApiLog(log)
+            expect(store.apiLogs).toHaveLength(1)
+        } finally {
+            store.apiLogs = originalLogs
+            save.mockRestore()
+        }
+    })
+
     it('新增接口日志后立即持久化', async () => {
         const save = vi.spyOn(store, 'saveToFile').mockResolvedValue()
         const originalLogs = store.apiLogs
@@ -46,7 +61,7 @@ describe('Meting 全局 Cookie 优先级', () => {
             store.cookies.clear()
             accounts.forEach(account => store.cookies.set(account.id, account))
             expect(store.getCookies().map(account => account.id)).toEqual([
-                'netease-free', 'netease-vip', 'tencent-free', 'kugou-free', 'qishui-vip',
+                'netease-free', 'tencent-free', 'kugou-free', 'netease-vip', 'qishui-vip',
             ])
         } finally {
             store.cookies.clear()

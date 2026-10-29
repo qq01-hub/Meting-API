@@ -28,11 +28,7 @@ describe('FM account selection', () => {
         expect(handle.mock.calls.map(call => call[2])).toEqual(['SELECTED', 'VIP'])
         expect(ctx.status).not.toHaveBeenCalledWith(502)
         expect(free.cookie).toBe('FREE')
-        expect(apiLog).toHaveBeenCalledWith(expect.objectContaining({
-            code: 'FM_ACCOUNT_FAILED',
-            cookieId: 'selected',
-            preferred: true,
-        }))
+        expect(apiLog).not.toHaveBeenCalled()
     })
 
     it('returns an empty FM list after every eligible account fails instead of 502', async () => {

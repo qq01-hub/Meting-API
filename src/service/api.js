@@ -80,6 +80,11 @@ export default async (ctx) => {
     }
     const requiresSvip = type === 'url' && Boolean(quality) && store.isQualityRequiresSvip(quality, server)
     let data
+    let initialRequestError = null
+    const pendingApiLogs = []
+    const flushPendingApiLogs = async () => {
+        for (const log of pendingApiLogs.splice(0)) await recordApiLog(log)
+    }
     if (type === 'fm' && !explicitCookie) {
         const attemptedIds = []
         let currentCookie = storedCookie
@@ -96,7 +101,7 @@ export default async (ctx) => {
                     break
                 }
                 await store.recordCookieFmFailure(currentCookie.id)
-                await recordApiLog({
+                pendingApiLogs.push({
                     method: ctx.req.method,
                     path: ctx.req.path,
                     status: 200,
@@ -109,7 +114,7 @@ export default async (ctx) => {
                 })
             } catch (error) {
                 await store.recordCookieFmFailure(currentCookie.id)
-                await recordApiLog({
+                pendingApiLogs.push({
                     method: ctx.req.method,
                     path: ctx.req.path,
                     status: 200,
@@ -124,7 +129,7 @@ export default async (ctx) => {
             try {
                 currentCookie = store.getFallbackCookieForFm(server, attemptedIds)
             } catch (error) {
-                await recordApiLog({
+                pendingApiLogs.push({
                     method: ctx.req.method,
                     path: ctx.req.path,
                     status: 200,
@@ -137,6 +142,7 @@ export default async (ctx) => {
             }
         }
         data = Array.isArray(data) ? data : []
+        if (!data.length) await flushPendingApiLogs()
     } else {
         try {
             data = await p.get(server).handle(type, id, cookie, { quality, signerUrl, ...pagination })
@@ -146,6 +152,7 @@ export default async (ctx) => {
             return ctx.json(await getStructuredLyrics(server, id, cookie, {}))
         }
         if (type === 'url') {
+            initialRequestError = error
             data = null
         } else if (type === 'fm') {
             await recordApiLog({
@@ -178,11 +185,22 @@ export default async (ctx) => {
                 attemptedIds.push(storedCookie.id)
                 attemptedCookies.add(cookie)
                 await store.recordCookieUrlFailure(storedCookie.id, id, Boolean(payload?.verificationRequired))
+                pendingApiLogs.push({
+                    method: ctx.req.method,
+                    path: ctx.req.path,
+                    status: 200,
+                    level: 'warning',
+                    code: payload?.verificationRequired ? 'URL_VERIFICATION_REQUIRED' : initialRequestError ? 'URL_ACCOUNT_FAILED' : 'URL_EMPTY_RESULT',
+                    platform: server,
+                    cookieId: storedCookie.id,
+                    error: payload?.verificationRequired ? '账号要求验证' : initialRequestError?.message || '账号未返回播放链接',
+                })
+                initialRequestError = null
                 let fallbackCookie = null
                 try {
                     fallbackCookie = store.getFallbackCookieForQuality(server, quality || 'standard', attemptedIds)
                 } catch (error) {
-                    await recordApiLog({
+                    pendingApiLogs.push({
                         method: ctx.req.method,
                         path: ctx.req.path,
                         status: 200,
@@ -199,7 +217,18 @@ export default async (ctx) => {
                 data = null
                 try {
                     data = await p.get(server).handle(type, id, cookie, { quality, signerUrl })
-                } catch {}
+                } catch (error) {
+                    pendingApiLogs.push({
+                        method: ctx.req.method,
+                        path: ctx.req.path,
+                        status: 200,
+                        level: 'warning',
+                        code: 'URL_ACCOUNT_FAILED',
+                        platform: server,
+                        cookieId: fallbackCookie.id,
+                        error: error?.message || '账号取链请求失败',
+                    })
+                }
                 payload = typeof data === 'string'
                     ? buildUrlPayload(data, quality || 'standard', quality || 'standard', server)
                     : data
@@ -207,6 +236,7 @@ export default async (ctx) => {
             }
         }
         if (!url) {
+            await flushPendingApiLogs()
             console.warn('[Meting] no url', JSON.stringify({
                 server,
                 type,
