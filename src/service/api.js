@@ -8,6 +8,14 @@ import config from '../config.js'
 import { fetchAuxiliaryLoudness, needsStandardLoudnessUrl, shouldFetchAuxiliaryLoudness } from './loudness.js'
 import { resolveLoudnessServiceUrl } from './loudness-config.js'
 import { parseNeteasePagination } from './netease-pagination.js'
+
+const recordApiLog = async (log) => {
+    try {
+        await store.addApiLog(log)
+    } catch (error) {
+        console.warn('[Meting] 接口日志写入失败', error?.message || error)
+    }
+}
 import { getStructuredLyrics } from './structured-lyrics.js'
 export default async (ctx) => {
 
@@ -57,6 +65,7 @@ export default async (ctx) => {
     }
 
     cookie = selectRequestCookie(explicitCookie, storedCookie)
+    ctx.set?.('apiLogContext', { platform: server, cookieId: storedCookie?.id || '' })
     if (type === 'url' && !explicitCookie && !storedCookie) {
         ctx.status(403)
         return ctx.json({ error: 'no url' })
@@ -71,14 +80,88 @@ export default async (ctx) => {
     }
     const requiresSvip = type === 'url' && Boolean(quality) && store.isQualityRequiresSvip(quality, server)
     let data
-    try {
-        data = await p.get(server).handle(type, id, cookie, { quality, signerUrl, ...pagination })
-    } catch (error) {
+    if (type === 'fm' && !explicitCookie) {
+        const attemptedIds = []
+        let currentCookie = storedCookie
+        while (currentCookie) {
+            attemptedIds.push(currentCookie.id)
+            try {
+                data = await p.get(server).handle(type, id, currentCookie.cookie, { quality, signerUrl, ...pagination })
+                if (Array.isArray(data) && data.length) {
+                    storedCookie = currentCookie
+                    cookie = currentCookie.cookie
+                    ctx.set?.('apiLogContext', { platform: server, cookieId: currentCookie.id })
+                    await store.recordCookieRequestSuccess(currentCookie.id)
+                    await store.recordCookieFmSuccess(currentCookie.id)
+                    break
+                }
+                await store.recordCookieFmFailure(currentCookie.id)
+                await recordApiLog({
+                    method: ctx.req.method,
+                    path: ctx.req.path,
+                    status: 200,
+                    level: 'warning',
+                    code: 'FM_EMPTY_RESULT',
+                    platform: server,
+                    cookieId: currentCookie.id,
+                    preferred: attemptedIds.length === 1,
+                    error: 'FM 账号返回空列表',
+                })
+            } catch (error) {
+                await store.recordCookieFmFailure(currentCookie.id)
+                await recordApiLog({
+                    method: ctx.req.method,
+                    path: ctx.req.path,
+                    status: 200,
+                    level: 'warning',
+                    code: 'FM_ACCOUNT_FAILED',
+                    platform: server,
+                    cookieId: currentCookie.id,
+                    preferred: attemptedIds.length === 1,
+                    error: error?.message || 'FM 账号请求失败',
+                })
+            }
+            try {
+                currentCookie = store.getFallbackCookieForFm(server, attemptedIds)
+            } catch (error) {
+                await recordApiLog({
+                    method: ctx.req.method,
+                    path: ctx.req.path,
+                    status: 200,
+                    level: 'error',
+                    code: 'FM_FAILOVER_FAILED',
+                    platform: server,
+                    error: error?.message || 'FM 账号分流失败',
+                })
+                currentCookie = null
+            }
+        }
+        data = Array.isArray(data) ? data : []
+    } else {
+        try {
+            data = await p.get(server).handle(type, id, cookie, { quality, signerUrl, ...pagination })
+        } catch (error) {
         if (type === 'lrc' && query.format === 'json' && ['netease', 'tencent', 'kugou'].includes(server)) {
             console.warn(`[Lyrics] ${server} ordinary lyric unavailable, trying word timing`)
             return ctx.json(await getStructuredLyrics(server, id, cookie, {}))
         }
-        if ((!requiresSvip && !fmUrl && !(server === 'tencent' && type === 'url')) || !storedCookie) throw error
+        if (type === 'url') {
+            data = null
+        } else if (type === 'fm') {
+            await recordApiLog({
+                method: ctx.req.method,
+                path: ctx.req.path,
+                status: 200,
+                level: 'warning',
+                code: 'FM_EXPLICIT_ACCOUNT_FAILED',
+                platform: server,
+                error: error?.message || 'FM 账号请求失败',
+            })
+            data = []
+        } else {
+            if ((!requiresSvip && !fmUrl && !(server === 'tencent' && type === 'url')) || !storedCookie) throw error
+        }
+        }
     }
 
     if (type === 'url') {
@@ -88,17 +171,31 @@ export default async (ctx) => {
             : data
 
         let url = payload?.url || ''
-        if (server === 'tencent' && storedCookie) {
+        if (!url && storedCookie) {
             const attemptedIds = []
             const attemptedCookies = new Set()
-            while (!url) {
+            while (!url && storedCookie) {
                 attemptedIds.push(storedCookie.id)
                 attemptedCookies.add(cookie)
                 await store.recordCookieUrlFailure(storedCookie.id, id, Boolean(payload?.verificationRequired))
-                const fallbackCookie = store.getFallbackCookieForQuality(server, quality || 'standard', attemptedIds)
+                let fallbackCookie = null
+                try {
+                    fallbackCookie = store.getFallbackCookieForQuality(server, quality || 'standard', attemptedIds)
+                } catch (error) {
+                    await recordApiLog({
+                        method: ctx.req.method,
+                        path: ctx.req.path,
+                        status: 200,
+                        level: 'error',
+                        code: 'URL_FAILOVER_FAILED',
+                        platform: server,
+                        error: error?.message || '歌曲链接账号分流失败',
+                    })
+                }
                 if (!fallbackCookie || attemptedCookies.has(fallbackCookie.cookie)) break
                 storedCookie = fallbackCookie
                 cookie = fallbackCookie.cookie
+                ctx.set?.('apiLogContext', { platform: server, cookieId: fallbackCookie.id })
                 data = null
                 try {
                     data = await p.get(server).handle(type, id, cookie, { quality, signerUrl })
@@ -108,31 +205,7 @@ export default async (ctx) => {
                     : data
                 url = payload?.url || ''
             }
-        } else if (!url && fmUrl && storedCookie) {
-            await store.recordCookieUrlFailure(storedCookie.id, id, false)
-            const fallbackCookie = store.getFallbackCookieForQuality(server, quality || 'standard', storedCookie.id)
-            if (fallbackCookie) {
-                storedCookie = fallbackCookie
-                cookie = fallbackCookie.cookie
-                try {
-                    data = await p.get(server).handle(type, id, cookie, { quality, signerUrl })
-                    payload = typeof data === 'string'
-                        ? buildUrlPayload(data, quality || 'standard', quality || 'standard', server)
-                        : data
-                    url = payload?.url || ''
-                } catch {}
-                if (!url) await store.recordCookieUrlFailure(fallbackCookie.id, id, false)
-            }
-        } else if (!url && requiresSvip && storedCookie) {
-            try {
-                data = await p.get(server).handle(type, id, cookie, { quality, signerUrl })
-                payload = typeof data === 'string'
-                    ? buildUrlPayload(data, quality || 'standard', quality || 'standard', server)
-                    : data
-                url = payload?.url || ''
-            } catch {}
         }
-        if (!url && !fmUrl && storedCookie && server !== 'tencent') await store.recordCookieUrlFailure(storedCookie.id, id, false)
         if (!url) {
             console.warn('[Meting] no url', JSON.stringify({
                 server,
@@ -153,8 +226,10 @@ export default async (ctx) => {
             payload.url = url
         }
         if (url.startsWith('@')) {
+            if (storedCookie) await store.recordCookieRequestSuccess(storedCookie.id)
             return ctx.text(url)
         }
+        if (storedCookie) await store.recordCookieRequestSuccess(storedCookie.id)
         if (server === 'tencent' && storedCookie) await store.recordCookieUrlSuccess(storedCookie.id)
 
         const loudnessServiceUrl = resolveLoudnessServiceUrl(store.getLoudnessServiceUrl(), config.LOUDNESS_SERVICE_URL)
@@ -197,6 +272,10 @@ export default async (ctx) => {
             duration: payload.duration,
             loudness: payload.loudness || null,
         })
+    }
+
+    if (storedCookie && type !== 'fm' && type !== 'url') {
+        await store.recordCookieRequestSuccess(storedCookie.id)
     }
 
     if (type === 'pic') {

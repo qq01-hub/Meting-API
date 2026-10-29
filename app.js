@@ -22,7 +22,25 @@ app.use('*', cors())
 app.use('*', async (context, next) => {
     await next()
     const path = context.req.path
-    const logPath = ['/', '/api', '/test', '/audio/qishui'].includes(path) ? path : path.startsWith('/admin/') ? '/admin/*' : '[other]'
+    const logPath = ['/', '/api', '/test', '/audio/qishui'].includes(path) ? path : path.startsWith('/admin/') ? path : '[other]'
+    if (context.res.status >= 400) {
+        let response = ''
+        try { response = (await context.res.clone().text()).slice(0, 2000) } catch {}
+        try {
+            const apiLogContext = context.get('apiLogContext') || {}
+            await store.addApiLog({
+                method: context.req.method,
+                path,
+                status: context.res.status,
+                level: 'error',
+                platform: apiLogContext.platform || '',
+                cookieId: apiLogContext.cookieId || '',
+                error: response,
+            })
+        } catch (error) {
+            console.error('[HTTP] 接口日志写入失败', error?.message || error)
+        }
+    }
     console.info('[HTTP]', context.req.method, logPath, context.res.status)
 })
 

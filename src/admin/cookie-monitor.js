@@ -8,6 +8,9 @@ const getPlatformName = (platform) => ({
     kugou: '酷狗音乐',
 }[platform] || platform || '未知平台')
 
+export const isFmPriorityCookie = (cookie, getPriorityId = store.getFmPriorityCookieId.bind(store)) =>
+    Boolean(cookie?.fmPriority || getPriorityId(cookie?.platform) === cookie?.id)
+
 class CookieMonitor {
     constructor() {
         this.timer = null
@@ -123,11 +126,12 @@ class CookieMonitor {
                 }
             }
 
-            if (wasValid === true && nowValid === false) {
+            const suppressNotifications = isFmPriorityCookie(cookie)
+            if (!suppressNotifications && wasValid === true && nowValid === false) {
                 await this.handleCookieInvalid(cookie, result.error)
             }
 
-            if (nowValid && nowCanPlayVip === false) {
+            if (!suppressNotifications && nowValid && nowCanPlayVip === false) {
                 console.log(`[CookieMonitor] 检测到无法播放VIP: ${cookie.note || cookie.id}, wasCanPlayVip: ${wasCanPlayVip}, nowCanPlayVip: ${nowCanPlayVip}`)
                 if (wasCanPlayVip === true) {
                     await this.handleVipLost(cookie)

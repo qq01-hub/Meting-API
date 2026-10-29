@@ -22,6 +22,7 @@ const LOGS_FILE = 'logs.json'
 const SECURITY_FILE = 'security.json'
 const CONFIG_FILE = 'config.json'
 const MONITOR_LOGS_FILE = 'monitor_logs.json'
+const API_LOGS_FILE = 'api_logs.json'
 const API_TOKENS_FILE = 'api_tokens.json'
 const COOKIE_KEY_FILE = 'cookie-encryption.key'
 const COOKIE_ENCRYPTION_PREFIX = 'enc:v1:'
@@ -32,6 +33,8 @@ const TENCENT_SLIDER_COOLDOWN = 60 * 60 * 1000
 
 const isCookieAvailable = (cookie) => cookie.isActive !== false && cookie.isValid !== false
     && !(cookie.platform === 'tencent' && Number(cookie.tencentCooldownUntil) > Date.now())
+const isFmCookieAvailable = (cookie) => isCookieAvailable(cookie)
+    && Number(cookie.fmCooldownUntil || 0) <= Date.now()
 
 const isContributionCookie = (cookie) => cookie?.source === 'contribution'
     || Boolean(cookie?.contributionKey)
@@ -42,6 +45,19 @@ const cookieHasSvip = (cookie) => Boolean(
     || cookie?.userInfo?.canPlaySvip
     || (Number(cookie?.userInfo?.svipType) || 0) > 0,
 )
+
+const cookieHasMembership = (cookie) => Boolean(
+    cookieHasSvip(cookie)
+    || cookie?.userInfo?.isVip
+    || cookie?.userInfo?.canPlayVip,
+)
+
+const COOKIE_PLATFORM_ORDER = {
+    netease: 0,
+    tencent: 1,
+    kugou: 2,
+    qishui: 3,
+}
 
 export const rankActiveCookie = (cookie) => {
     // Shared SVIP outranks every global/base account. Otherwise the base
@@ -57,6 +73,11 @@ export const selectActiveCookie = (cookies) => [...cookies]
         if (rank) return rank
         return Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0)
     })[0] || null
+
+export const selectRandomCookie = (cookies) => {
+    const available = [...cookies]
+    return available.length ? available[Math.floor(Math.random() * available.length)] : null
+}
 
 export const selectFmCookie = (cookies) => {
     const priorityCookie = cookies.find(cookie => cookie.fmPriority)
@@ -83,7 +104,7 @@ export const selectCookieForQuality = (cookies, quality, platform, preferFm = fa
     const fmCookie = preferFm ? selectFmCookie(available) : null
     if (fmCookie && cookieCanPlayRequirement(fmCookie, requirement)) return fmCookie
     const eligible = available.filter(cookie => cookieCanPlayRequirement(cookie, requirement))
-    return selectActiveCookie(eligible.length ? eligible : available)
+    return selectRandomCookie(eligible)
 }
 
 export const selectRequestCookie = (explicitCookie, storedCookie) =>
@@ -157,6 +178,7 @@ class DataStore {
         this.lockedAccounts = new Map()
         this.config = {}
         this.monitorLogs = []
+        this.apiLogs = []
         this.apiTokens = new Map()
         this.cookieEncryptionKey = null
         this.initialized = false
@@ -350,6 +372,11 @@ class DataStore {
             if (fs.existsSync(monitorLogsPath)) {
                 this.monitorLogs = JSON.parse(fs.readFileSync(monitorLogsPath, 'utf-8'))
             }
+
+            const apiLogsPath = path.join(DATA_DIR, API_LOGS_FILE)
+            if (fs.existsSync(apiLogsPath)) {
+                this.apiLogs = JSON.parse(fs.readFileSync(apiLogsPath, 'utf-8'))
+            }
             
             const apiTokensPath = path.join(DATA_DIR, API_TOKENS_FILE)
             if (fs.existsSync(apiTokensPath)) {
@@ -387,6 +414,10 @@ class DataStore {
             const monitorLogsPath = path.join(DATA_DIR, MONITOR_LOGS_FILE)
             const recentMonitorLogs = this.monitorLogs.slice(-500)
             fs.writeFileSync(monitorLogsPath, JSON.stringify(recentMonitorLogs, null, 2))
+
+            const apiLogsPath = path.join(DATA_DIR, API_LOGS_FILE)
+            const recentApiLogs = this.apiLogs.slice(-1000)
+            fs.writeFileSync(apiLogsPath, JSON.stringify(recentApiLogs, null, 2))
             
             const apiTokensPath = path.join(DATA_DIR, API_TOKENS_FILE)
             fs.writeFileSync(apiTokensPath, JSON.stringify(Object.fromEntries(this.apiTokens), null, 2))
@@ -633,7 +664,14 @@ class DataStore {
         if (platform) {
             cookies = cookies.filter(c => c.platform === platform)
         }
-        return cookies.sort((a, b) => b.createdAt - a.createdAt)
+        return cookies.sort((a, b) => {
+            const platformRank = (COOKIE_PLATFORM_ORDER[a.platform] ?? Number.MAX_SAFE_INTEGER)
+                - (COOKIE_PLATFORM_ORDER[b.platform] ?? Number.MAX_SAFE_INTEGER)
+            if (platformRank) return platformRank
+            const membershipRank = Number(cookieHasMembership(a)) - Number(cookieHasMembership(b))
+            if (membershipRank) return membershipRank
+            return Number(b.createdAt || 0) - Number(a.createdAt || 0)
+        })
     }
 
     getActiveCookie(platform) {
@@ -646,13 +684,51 @@ class DataStore {
     }
 
     getActiveCookieForFm(platform) {
-        const cookies = this.getCookies(platform).filter(c => c.isActive && isCookieAvailable(c))
+        const cookies = this.getCookies(platform).filter(c => c.isActive && isFmCookieAvailable(c))
         const priorityId = this.getFmPriorityCookieId(platform)
         if (priorityId) {
             const priorityCookie = cookies.find(cookie => cookie.id === priorityId)
             if (priorityCookie) return priorityCookie
         }
         return selectFmCookie(cookies)
+    }
+
+    getFallbackCookieForFm(platform, excludedId = []) {
+        const excludedIds = new Set(Array.isArray(excludedId) ? excludedId : [excludedId])
+        const excludedCookies = new Set([...excludedIds].map(id => this.getCookie(id)?.cookie).filter(Boolean))
+        const candidates = this.getCookies(platform).filter(cookie =>
+            !excludedIds.has(cookie.id)
+            && !excludedCookies.has(cookie.cookie)
+            && cookie.isActive
+            && isFmCookieAvailable(cookie)
+            && cookie.userInfo
+            && cookieCanPlayRequirement(cookie, 'VIP')
+        )
+        if (!candidates.length) return null
+        return candidates[Math.floor(Math.random() * candidates.length)]
+    }
+
+    async recordCookieFmFailure(id) {
+        const cookie = this.cookies.get(id)
+        if (!cookie) return
+        cookie.fmErrorCount = (Number(cookie.fmErrorCount) || 0) + 1
+        cookie.fmCooldownUntil = Date.now() + 30 * 1000
+    }
+
+    async recordCookieFmSuccess(id) {
+        const cookie = this.cookies.get(id)
+        if (!cookie) return
+        cookie.fmErrorCount = 0
+        cookie.fmCooldownUntil = 0
+        cookie.fmSuccessCount = (Number(cookie.fmSuccessCount) || 0) + 1
+        await this.saveToFile()
+    }
+
+    async recordCookieRequestSuccess(id) {
+        const cookie = this.cookies.get(id)
+        if (!cookie) return
+        cookie.requestSuccessCount = (Number(cookie.requestSuccessCount) || 0) + 1
+        await this.saveToFile()
     }
 
     async setFmPriorityCookie(platform, cookieId, operator = 'system') {
@@ -698,7 +774,7 @@ class DataStore {
             && cookie.userInfo && cookieCanPlayRequirement(cookie, 'VIP')
             && (platform === 'tencent' || (cookie.userInfo && cookieCanPlayRequirement(cookie, requirement))))
         if (platform === 'tencent') return selectCookieForQuality(cookies, quality, platform)
-        return selectActiveCookie(cookies)
+        return selectRandomCookie(cookies)
     }
 
     async recordCookieUrlFailure(id, songmid = '', verificationRequired = false) {
@@ -1302,6 +1378,21 @@ class DataStore {
             .slice()
             .reverse()
             .slice(offset, offset + limit)
+    }
+
+    async addApiLog(logData) {
+        const log = {
+            id: this.generateId(),
+            timestamp: Date.now(),
+            ...logData,
+        }
+        this.apiLogs.push(log)
+        await this.saveToFile()
+        return log
+    }
+
+    getApiLogs(limit = 100, offset = 0) {
+        return this.apiLogs.slice().reverse().slice(offset, offset + limit)
     }
 
     generateApiToken() {

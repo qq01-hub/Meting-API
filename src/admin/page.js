@@ -966,6 +966,7 @@ const getAdminHtml = () => `<!DOCTYPE html>
                 <li data-section="tokens"><span class="menu-icon">🔑</span><span class="menu-text">API Token</span></li>
                 <li data-section="users"><span class="menu-icon">👥</span><span class="menu-text">用户管理</span></li>
                 <li data-section="logs"><span class="menu-icon">📋</span><span class="menu-text">操作日志</span></li>
+                <li data-section="apiLogs"><span class="menu-icon">🌐</span><span class="menu-text">接口日志</span></li>
                 <li data-section="settings"><span class="menu-icon">⚙️</span><span class="menu-text">设置</span></li>
             </ul>
         </div>
@@ -1200,6 +1201,21 @@ const getAdminHtml = () => `<!DOCTYPE html>
                             <table class="table">
                                 <thead><tr><th>时间</th><th>操作类型</th><th>详情</th><th>操作人</th></tr></thead>
                                 <tbody id="logsList"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="content-section" id="apiLogsSection">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">接口日志</span>
+                            <button class="btn btn-default btn-sm" onclick="loadApiLogs()">刷新</button>
+                        </div>
+                        <div class="table-container">
+                            <table class="table">
+                                <thead><tr><th>时间</th><th>级别</th><th>方法</th><th>路径</th><th>平台</th><th>账号</th><th>状态</th><th>错误响应</th></tr></thead>
+                                <tbody id="apiLogsList"></tbody>
                             </table>
                         </div>
                     </div>
@@ -1712,11 +1728,12 @@ const getAdminHtml = () => `<!DOCTYPE html>
             document.querySelector('[data-section="' + section + '"]').classList.add('active');
             document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
             document.getElementById(section + 'Section').classList.add('active');
-            const titles = { dashboard: '仪表盘', cookies: 'Cookie管理', monitor: 'Cookie监测', tokens: 'API Token', users: '用户管理', logs: '操作日志', settings: '设置' };
+            const titles = { dashboard: '仪表盘', cookies: 'Cookie管理', monitor: 'Cookie监测', tokens: 'API Token', users: '用户管理', logs: '操作日志', apiLogs: '接口日志', settings: '设置' };
             document.getElementById('pageTitle').textContent = titles[section];
             if (section === 'cookies') loadCookies();
             if (section === 'users') loadUsers();
             if (section === 'logs') loadLogs();
+            if (section === 'apiLogs') loadApiLogs();
             if (section === 'monitor') loadMonitor();
             if (section === 'tokens') loadTokens();
         };
@@ -1765,7 +1782,7 @@ const getAdminHtml = () => `<!DOCTYPE html>
                     '<td>' + (cookie.note || '-') + '</td>' +
                     '<td><div class="validation-status">' + getValidationBadge(cookie) + '</div>' +
                     (vipAbilityText ? '<div class="user-info-tooltip">' + vipAbilityText + '</div>' : '') +
-                    '<div class="user-info-tooltip cookie-error-counts"><span class="url-error-count">URL 获取失败：' + (cookie.urlErrorCount || 0) + ' 次</span>' +
+                    '<div class="user-info-tooltip cookie-error-counts"><span class="url-error-count">成功请求：' + (cookie.requestSuccessCount || 0) + ' 次</span><span class="url-error-count">FM成功：' + (cookie.fmSuccessCount || 0) + ' 次</span><span class="url-error-count">URL 获取失败：' + (cookie.urlErrorCount || 0) + ' 次</span>' +
                     (cookie.platform === 'tencent' ? '<span class="slider-error-count">滑块：' + (cookie.tencentSliderCount || 0) + ' 次</span>' : '') + '</div>' +
                     (cookie.validationError ? '<div style="color:var(--danger);font-size:11px;">' + cookie.validationError + '</div>' : '') + '</td>' +
                     '<td>' + (cookie.isActive ? '<span class="status-dot status-active"></span>启用' : '<span class="status-dot status-inactive"></span>禁用') + '</td>' +
@@ -1939,6 +1956,26 @@ const getAdminHtml = () => `<!DOCTYPE html>
             if (!res?.success) return;
             const tbody = document.getElementById('logsList');
             tbody.innerHTML = res.data.map(log => '<tr><td>' + formatDate(log.timestamp) + '</td><td>' + log.action + '</td><td>' + log.details + '</td><td>' + log.username + '</td></tr>').join('');
+        };
+
+        const loadApiLogs = async () => {
+            const res = await api('/admin/api-logs?limit=200');
+            if (!res?.success) return;
+            const tbody = document.getElementById('apiLogsList');
+            if (!res.data.length) {
+                tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><div class="empty-state-text">暂无接口错误日志</div></td></tr>';
+                return;
+            }
+            tbody.innerHTML = res.data.map(log => '<tr>'
+                + '<td>' + formatDate(log.timestamp) + '</td>'
+                + '<td><span class="badge ' + (log.level === 'warning' ? 'badge-warning' : 'badge-error') + '">' + (log.level === 'warning' ? '警告' : '错误') + '</span></td>'
+                + '<td>' + (log.method || '-') + '</td>'
+                + '<td><code>' + (log.path || '-') + '</code></td>'
+                + '<td>' + (log.platform || '-') + '</td>'
+                + '<td><code>' + (log.cookieId || '-') + '</code></td>'
+                + '<td>' + (log.status || '-') + '</td>'
+                + '<td style="max-width:520px;word-break:break-all;white-space:pre-wrap;">' + (log.error || '-') + '</td>'
+                + '</tr>').join('');
         };
 
         const loadTokens = async () => {

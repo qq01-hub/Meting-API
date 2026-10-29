@@ -4,6 +4,56 @@ import store, { selectActiveCookie, selectFmCookie, selectCookieForQuality, sele
 const cookie = (note, userInfo = {}, updatedAt = 1) => ({ note, userInfo, updatedAt })
 
 describe('Meting 全局 Cookie 优先级', () => {
+    it('新增接口日志后立即持久化', async () => {
+        const save = vi.spyOn(store, 'saveToFile').mockResolvedValue()
+        const originalLogs = store.apiLogs
+        store.apiLogs = []
+        try {
+            await store.addApiLog({ method: 'GET', path: '/api', status: 403 })
+            expect(save).toHaveBeenCalledTimes(1)
+        } finally {
+            store.apiLogs = originalLogs
+            save.mockRestore()
+        }
+    })
+
+    it('记录账号普通成功请求和 FM 成功请求次数', async () => {
+        const account = { id: 'counter-account', platform: 'netease', requestSuccessCount: 2, fmSuccessCount: 1 }
+        const save = vi.spyOn(store, 'saveToFile').mockResolvedValue()
+        store.cookies.set(account.id, account)
+        try {
+            await store.recordCookieRequestSuccess(account.id)
+            await store.recordCookieFmSuccess(account.id)
+            expect(account.requestSuccessCount).toBe(3)
+            expect(account.fmSuccessCount).toBe(2)
+            expect(save).toHaveBeenCalled()
+        } finally {
+            store.cookies.delete(account.id)
+            save.mockRestore()
+        }
+    })
+
+    it('Cookie 列表按平台排序且无会员账号排在前面', () => {
+        const accounts = [
+            { id: 'qishui-vip', platform: 'qishui', userInfo: { isVip: true }, createdAt: 1 },
+            { id: 'netease-vip', platform: 'netease', userInfo: { isVip: true }, createdAt: 2 },
+            { id: 'netease-free', platform: 'netease', userInfo: { isVip: false }, createdAt: 3 },
+            { id: 'kugou-free', platform: 'kugou', userInfo: { isVip: false }, createdAt: 4 },
+            { id: 'tencent-free', platform: 'tencent', userInfo: { isVip: false }, createdAt: 5 },
+        ]
+        const original = new Map(store.cookies)
+        try {
+            store.cookies.clear()
+            accounts.forEach(account => store.cookies.set(account.id, account))
+            expect(store.getCookies().map(account => account.id)).toEqual([
+                'netease-free', 'netease-vip', 'tencent-free', 'kugou-free', 'qishui-vip',
+            ])
+        } finally {
+            store.cookies.clear()
+            original.forEach((account, id) => store.cookies.set(id, account))
+        }
+    })
+
     it('共享 SVIP 优先于基础 VIP 和基础非会员', () => {
         const baseVip = cookie('基础 QQ', { isVip: true }, 3)
         const sharedSvip = cookie('contribution:tencent:1', { isVip: true, isSvip: true }, 1)
@@ -110,6 +160,39 @@ describe('Meting 全局 Cookie 优先级', () => {
         })
     })
 
+    it.each(['netease', 'tencent', 'qishui', 'kugou'])('%s FM 回退随机选择 VIP 并跳过非 VIP', (platform) => {
+        const preferred = { id: 'preferred', platform, cookie: 'PREFERRED', isActive: true, isValid: true, userInfo: { canPlayVip: false } }
+        const free = { id: 'free', platform, cookie: 'FREE', isActive: true, isValid: true, userInfo: { canPlayVip: false } }
+        const vip = { id: 'vip', platform, cookie: 'VIP', isActive: true, isValid: true, userInfo: { canPlayVip: true } }
+        const getCookies = vi.spyOn(store, 'getCookies').mockReturnValue([preferred, free, vip])
+        const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+        try {
+            expect(store.getFallbackCookieForFm(platform, ['preferred'])).toBe(vip)
+        } finally {
+            getCookies.mockRestore()
+            random.mockRestore()
+        }
+    })
+
+    it('FM 账号失败后进入短暂冷却，成功后恢复可选', async () => {
+        const account = { id: 'fm-cooldown', platform: 'netease', cookie: 'FM', isActive: true, isValid: true, userInfo: { canPlayVip: true } }
+        const getCookies = vi.spyOn(store, 'getCookies').mockReturnValue([account])
+        const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+        store.cookies.set(account.id, account)
+        try {
+            await store.recordCookieFmFailure(account.id)
+            expect(store.getActiveCookieForFm('netease')).toBeNull()
+            now.mockReturnValue(31001)
+            expect(store.getActiveCookieForFm('netease')).toBe(account)
+            await store.recordCookieFmSuccess(account.id)
+            expect(account.fmCooldownUntil).toBe(0)
+        } finally {
+            store.cookies.delete(account.id)
+            getCookies.mockRestore()
+            now.mockRestore()
+        }
+    })
+
     it('显式指定 Cookie 时不使用 FM 优先账号', () => {
         const explicitCookie = 'MUSIC_U=explicit'
         const fmCookie = cookie('FM账号')
@@ -188,7 +271,7 @@ describe('Meting 全局 Cookie 优先级', () => {
 
     it('temporarily skips slider accounts for normal, FM and quality selection', async () => {
         const account = { id: 'cooldown-test', platform: 'tencent', cookie: 'uin=123', isActive: true, isValid: true, updatedAt: 2, userInfo: { canPlaySvip: true } }
-        const backup = { id: 'cooldown-backup', platform: 'tencent', cookie: 'uin=456', isActive: true, isValid: true, updatedAt: 1, userInfo: { canPlayVip: true } }
+        const backup = { id: 'cooldown-backup', platform: 'tencent', cookie: 'uin=456', isActive: true, isValid: true, updatedAt: 1, userInfo: { canPlayVip: true, canPlaySvip: true } }
         const getCookies = vi.spyOn(store, 'getCookies').mockReturnValue([account, backup])
         const save = vi.spyOn(store, 'saveToFile').mockResolvedValue()
         const priority = vi.spyOn(store, 'getFmPriorityCookieId').mockReturnValue(account.id)

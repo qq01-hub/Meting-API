@@ -106,7 +106,7 @@ const buildRefreshParam = (cookie, musicid) => {
     }
 }
 
-const buildRefreshResult = (loginData, fallbackUin) => {
+export const buildRefreshResult = (loginData, fallbackUin, deviceCookie = '') => {
     const musicIdRaw = loginData.str_musicid || loginData.musicid || normalizeMusicId(fallbackUin) || fallbackUin
     const musicId = String(musicIdRaw).replace(/^o/, '')
     const uin = musicId ? `o${musicId}` : String(fallbackUin || '')
@@ -117,6 +117,8 @@ const buildRefreshResult = (loginData, fallbackUin) => {
         qm_keyst: loginData.musickey,
         p_lskey: loginData.musickey,
     }
+
+    if (deviceCookie) updates.psrf_qqdevice = deviceCookie
 
     if (loginData.refresh_key) updates.refresh_key = loginData.refresh_key
     if (loginData.access_token) updates.psrf_qqaccess_token = loginData.access_token
@@ -187,7 +189,7 @@ const callRefreshLogin = async (cookie) => {
     )
 
     if (loginData.musickey) {
-        return buildRefreshResult(loginData, uin)
+        return buildRefreshResult(loginData, uin, cookie.psrf_qqdevice || '')
     }
 
     const messages = {

@@ -7,6 +7,72 @@ import { getTencentVerification } from '../providers/tencent/song.js'
 describe('FM account selection', () => {
     afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
+    it.each(['netease', 'tencent', 'qishui', 'kugou'])('%s retries FM with a random VIP account after the selected account fails', async (server) => {
+        const selected = { id: 'selected', platform: server, cookie: 'SELECTED', isActive: true, isValid: true, userInfo: { canPlayVip: false } }
+        const free = { id: 'free', platform: server, cookie: 'FREE', isActive: true, isValid: true, userInfo: { canPlayVip: false } }
+        const vip = { id: 'vip', platform: server, cookie: 'VIP', isActive: true, isValid: true, userInfo: { canPlayVip: true } }
+        vi.spyOn(store, 'getActiveCookieForFm').mockReturnValue(selected)
+        vi.spyOn(store, 'getFallbackCookieForFm').mockReturnValue(vip)
+        const apiLog = vi.spyOn(store, 'addApiLog').mockResolvedValue()
+        const handle = vi.fn(async (_type, _id, cookie) => cookie === 'SELECTED'
+            ? Promise.reject(new Error('selected account failed'))
+            : [{ url: 'song-id', pic: '', lrc: '' }])
+        vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['fm'], handle })
+        const ctx = {
+            req: { url: 'http://localhost/api', query: () => ({ server, type: 'fm' }), header: () => '' },
+            status: vi.fn(), json: vi.fn(value => value),
+        }
+
+        const [song] = await api(ctx)
+        expect(song.url).toContain('id=song-id')
+        expect(handle.mock.calls.map(call => call[2])).toEqual(['SELECTED', 'VIP'])
+        expect(ctx.status).not.toHaveBeenCalledWith(502)
+        expect(free.cookie).toBe('FREE')
+        expect(apiLog).toHaveBeenCalledWith(expect.objectContaining({
+            code: 'FM_ACCOUNT_FAILED',
+            cookieId: 'selected',
+            preferred: true,
+        }))
+    })
+
+    it('returns an empty FM list after every eligible account fails instead of 502', async () => {
+        const selected = { id: 'selected', platform: 'netease', cookie: 'SELECTED', isActive: true, isValid: true, userInfo: { canPlayVip: true } }
+        vi.spyOn(store, 'getActiveCookieForFm').mockReturnValue(selected)
+        vi.spyOn(store, 'getFallbackCookieForFm').mockReturnValue(null)
+        vi.spyOn(Providers.prototype, 'get').mockReturnValue({
+            support_type: ['fm'],
+            handle: vi.fn().mockRejectedValue(new Error('upstream 502')),
+        })
+        const ctx = {
+            req: { query: () => ({ server: 'netease', type: 'fm' }), header: () => '' },
+            status: vi.fn(), json: vi.fn(value => value),
+        }
+
+        expect(await api(ctx)).toEqual([])
+        expect(ctx.status).not.toHaveBeenCalledWith(502)
+    })
+
+    it.each(['netease', 'tencent', 'qishui', 'kugou'])('%s URL failure switches to another eligible account', async (server) => {
+        const first = { id: 'first', platform: server, cookie: 'FIRST', isActive: true, isValid: true, userInfo: { canPlayVip: true, canPlaySvip: true } }
+        const backup = { id: 'backup', platform: server, cookie: 'BACKUP', isActive: true, isValid: true, userInfo: { canPlayVip: true, canPlaySvip: true } }
+        vi.spyOn(store, 'getActiveCookieForQuality').mockReturnValue(first)
+        vi.spyOn(store, 'getFallbackCookieForQuality').mockReturnValue(backup)
+        vi.spyOn(store, 'recordCookieUrlFailure').mockResolvedValue()
+        vi.spyOn(store, 'recordCookieUrlSuccess').mockResolvedValue()
+        const handle = vi.fn()
+            .mockRejectedValueOnce(new Error('first URL failed'))
+            .mockResolvedValueOnce({ url: 'https://example.com/backup.mp3' })
+        vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle })
+        const ctx = {
+            req: { url: 'http://localhost/api', query: () => ({ server, type: 'url', id: 'song' }), header: () => '' },
+            status: vi.fn(), json: vi.fn(value => value), redirect: vi.fn(url => ({ url })),
+        }
+
+        expect((await api(ctx)).url).toBe('https://example.com/backup.mp3')
+        expect(handle.mock.calls.map(call => call[2])).toEqual(['FIRST', 'BACKUP'])
+        expect(ctx.status).not.toHaveBeenCalledWith(502)
+    })
+
     it.each(['netease', 'tencent', 'qishui', 'kugou'])('%s keeps a non-VIP FM account for lists but uses a VIP account for default URL quality', async (server) => {
         const fm = { id: 'fm', platform: server, cookie: 'FM_COOKIE', isActive: true, isValid: true, updatedAt: 2, userInfo: { canPlayVip: false } }
         const vip = { id: 'vip', platform: server, cookie: 'VIP_COOKIE', source: 'contribution', isActive: true, isValid: true, updatedAt: 1, userInfo: { canPlayVip: true } }
@@ -188,9 +254,10 @@ describe('FM account selection', () => {
         const accounts = [3, 2, 1].map(number => ({
             id: `qq-backup-${number}`, platform: 'tencent', cookie: `uin=${number};qqmusic_key=test`,
             isActive: true, isValid: true, updatedAt: number,
-            userInfo: { canPlaySvip: number > 1, canPlayVip: true },
+            userInfo: { canPlaySvip: true, canPlayVip: true },
         }))
         accounts.forEach(account => store.cookies.set(account.id, account))
+        vi.spyOn(Math, 'random').mockReturnValue(0)
         vi.spyOn(store, 'getCookies').mockReturnValue(accounts)
         vi.spyOn(store, 'getFmPriorityCookieId').mockReturnValue(accounts[0].id)
         vi.spyOn(store, 'saveToFile').mockResolvedValue()
@@ -220,6 +287,7 @@ describe('FM account selection', () => {
     it('handles QQ exceptions and exhausts backups without looping or retrying the same Cookie', async () => {
         const accounts = [3, 2, 1].map(number => ({ id: `qq-exhaust-${number}`, platform: 'tencent', cookie: `uin=${number}`, isActive: true, isValid: true, updatedAt: number, userInfo: { canPlayVip: true } }))
         const duplicate = { ...accounts[0], id: 'qq-duplicate', updatedAt: 0 }
+        vi.spyOn(Math, 'random').mockReturnValue(0)
         accounts.forEach(account => store.cookies.set(account.id, account))
         vi.spyOn(store, 'getCookies').mockReturnValue([...accounts, duplicate])
         vi.spyOn(store, 'saveToFile').mockResolvedValue()

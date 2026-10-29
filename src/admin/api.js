@@ -43,7 +43,7 @@ const qishuiVerifyAuth = async (c, next) => {
 }
 
 const formatCookieForDisplay = (cookie) => {
-    const { id, platform, createdAt, updatedAt, createdBy, isActive, isValid, validatedAt, userInfo, validationError, urlErrorCount, tencentSliderCount } = cookie
+    const { id, platform, createdAt, updatedAt, createdBy, isActive, isValid, validatedAt, userInfo, validationError, urlErrorCount, tencentSliderCount, requestSuccessCount, fmSuccessCount } = cookie
     const legacyContribution = String(cookie.note || '').startsWith('contribution:')
     const providerName = String(cookie.providerName || cookie.createdBy || '').trim()
     const note = legacyContribution ? `首页共享 · ${providerName || '匿名用户'}` : cookie.note
@@ -55,6 +55,8 @@ const formatCookieForDisplay = (cookie) => {
         id, platform, cookiePreview, note, providerName, source: cookie.source || (legacyContribution ? 'contribution' : 'admin'),
         createdAt, updatedAt, createdBy, isActive, isValid, validatedAt, userInfo, validationError, urlErrorCount: urlErrorCount || 0,
         tencentSliderCount: Number(tencentSliderCount) || 0,
+        requestSuccessCount: Number(requestSuccessCount) || 0,
+        fmSuccessCount: Number(fmSuccessCount) || 0,
         fmPriority: store.getFmPriorityCookieId(platform) === id,
     }
 }
@@ -455,7 +457,7 @@ export const adminRoutes = (app) => {
         try {
             for (let batch = 0; batch < (platform === 'qishui' ? 3 : 1); batch += 1) {
                 const data = await provider.handle('fm', mode, cookie)
-                if (platform !== 'qishui') return c.json({ success: true, data })
+                if (platform !== 'qishui') return c.json({ success: true, data: Array.isArray(data) ? data : [] })
                 if (!Array.isArray(data) || !data.length) continue
                 const candidates = [...data]
                     .filter((song) => !excludeIds.has(String(song?.id || '').trim()))
@@ -464,8 +466,24 @@ export const adminRoutes = (app) => {
             }
             return c.json({ success: false, error: '连续几批漫游歌曲都暂时没有可用候选' }, 403)
         } catch (error) {
-            return c.json({ success: false, error: '漫游歌曲获取失败', code: 'UPSTREAM_REQUEST_FAILED' }, 502)
+            console.warn('[Admin FM] 上游请求失败', JSON.stringify({ platform, message: error?.message || String(error) }))
+            await store.addApiLog({
+                method: c.req.method,
+                path: c.req.path,
+                status: 200,
+                level: 'warning',
+                platform,
+                error: error?.message || '漫游歌曲获取失败',
+                code: 'UPSTREAM_REQUEST_FAILED',
+            })
+            return c.json({ success: true, data: [], warning: '漫游暂时不可用，请稍后重试' })
         }
+    })
+
+    app.get('/admin/api-logs', authMiddleware, adminMiddleware, async (c) => {
+        const limit = Math.max(1, Math.min(500, parseInt(c.req.query('limit') || '100')))
+        const offset = Math.max(0, parseInt(c.req.query('offset') || '0'))
+        return c.json({ success: true, data: store.getApiLogs(limit, offset) })
     })
 
     app.post('/admin/contribute', authMiddleware, async (c) => {
