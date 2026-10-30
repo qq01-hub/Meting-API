@@ -8,6 +8,7 @@ import config from '../config.js'
 import { fetchAuxiliaryLoudness, needsStandardLoudnessUrl, shouldFetchAuxiliaryLoudness } from './loudness.js'
 import { resolveLoudnessServiceUrl } from './loudness-config.js'
 import { parseNeteasePagination } from './netease-pagination.js'
+import { musicFailure } from './music-errors.js'
 
 const recordApiLog = async (log) => {
     try {
@@ -67,8 +68,8 @@ export default async (ctx) => {
     cookie = selectRequestCookie(explicitCookie, storedCookie)
     ctx.set?.('apiLogContext', { platform: server, cookieId: storedCookie?.id || '' })
     if (type === 'url' && !explicitCookie && !storedCookie) {
-        ctx.status(403)
-        return ctx.json({ error: 'no url' })
+        ctx.status(503)
+        return ctx.json({ success: false, error: '音源暂无可用账号，请稍后重试', code: 'MUSIC_ACCOUNT_UNAVAILABLE' })
     }
 
     const signerUrl = server === 'qishui' ? resolveQishuiSignerUrl(store.getQishuiSignerUrl()) : ''
@@ -86,7 +87,13 @@ export default async (ctx) => {
         for (const log of pendingApiLogs.splice(0)) await recordApiLog(log)
     }
     if (type === 'fm' && !explicitCookie) {
+        if (!storedCookie) {
+            ctx.status(503)
+            return ctx.json({ success: false, error: '音源暂无可用账号，请稍后重试', code: 'MUSIC_ACCOUNT_UNAVAILABLE' })
+        }
         const attemptedIds = []
+        let fmFailure = null
+        let hadEmptyResult = false
         let currentCookie = storedCookie
         while (currentCookie) {
             attemptedIds.push(currentCookie.id)
@@ -100,6 +107,7 @@ export default async (ctx) => {
                     await store.recordCookieFmSuccess(currentCookie.id)
                     break
                 }
+                hadEmptyResult = true
                 await store.recordCookieFmFailure(currentCookie.id)
                 pendingApiLogs.push({
                     method: ctx.req.method,
@@ -113,17 +121,18 @@ export default async (ctx) => {
                     error: 'FM 账号返回空列表',
                 })
             } catch (error) {
+                fmFailure = musicFailure(error, server)
                 await store.recordCookieFmFailure(currentCookie.id)
                 pendingApiLogs.push({
                     method: ctx.req.method,
                     path: ctx.req.path,
-                    status: 200,
+                    status: fmFailure.status,
                     level: 'warning',
-                    code: 'FM_ACCOUNT_FAILED',
+                    code: fmFailure.code,
                     platform: server,
                     cookieId: currentCookie.id,
                     preferred: attemptedIds.length === 1,
-                    error: error?.message || 'FM 账号请求失败',
+                    error: fmFailure.error,
                 })
             }
             try {
@@ -143,6 +152,15 @@ export default async (ctx) => {
         }
         data = Array.isArray(data) ? data : []
         if (!data.length) await flushPendingApiLogs()
+        if (!data.length && fmFailure && !hadEmptyResult) {
+            if (fmFailure.code === 'MUSIC_ACCOUNT_INVALID') {
+                ctx.status(503)
+                return ctx.json({ success: false, code: 'MUSIC_ACCOUNT_UNAVAILABLE', error: '音源暂无可用账号，请稍后重试' })
+            }
+            const { status, ...failure } = fmFailure
+            ctx.status(status)
+            return ctx.json(failure)
+        }
     } else {
         try {
             data = await p.get(server).handle(type, id, cookie, { quality, signerUrl, ...pagination })
@@ -155,16 +173,18 @@ export default async (ctx) => {
             initialRequestError = error
             data = null
         } else if (type === 'fm') {
+            const { status, ...failure } = musicFailure(error, server)
             await recordApiLog({
                 method: ctx.req.method,
                 path: ctx.req.path,
-                status: 200,
+                status,
                 level: 'warning',
                 code: 'FM_EXPLICIT_ACCOUNT_FAILED',
                 platform: server,
-                error: error?.message || 'FM 账号请求失败',
+                error: failure.error,
             })
-            data = []
+            ctx.status(status)
+            return ctx.json(failure)
         } else {
             if ((!requiresSvip && !fmUrl && !(server === 'tencent' && type === 'url')) || !storedCookie) throw error
         }
@@ -178,6 +198,8 @@ export default async (ctx) => {
             : data
 
         let url = payload?.url || ''
+        let hadUrlResponse = initialRequestError === null
+        let urlFailure = initialRequestError ? musicFailure(initialRequestError, server) : null
         if (!url && storedCookie) {
             const attemptedIds = []
             const attemptedCookies = new Set()
@@ -217,7 +239,9 @@ export default async (ctx) => {
                 data = null
                 try {
                     data = await p.get(server).handle(type, id, cookie, { quality, signerUrl })
+                    hadUrlResponse = true
                 } catch (error) {
+                    urlFailure = musicFailure(error, server)
                     pendingApiLogs.push({
                         method: ctx.req.method,
                         path: ctx.req.path,
@@ -237,6 +261,11 @@ export default async (ctx) => {
         }
         if (!url) {
             await flushPendingApiLogs()
+            if (!hadUrlResponse && urlFailure) {
+                const { status, ...failure } = urlFailure
+                ctx.status(status)
+                return ctx.json(failure)
+            }
             console.warn('[Meting] no url', JSON.stringify({
                 server,
                 type,
@@ -247,8 +276,9 @@ export default async (ctx) => {
                 cookieVip: Boolean(storedCookie?.userInfo?.canPlayVip),
                 cookieSvip: Boolean(storedCookie?.userInfo?.canPlaySvip),
             }))
-            ctx.status(403)
-            return ctx.json({ error: 'no url' })
+            const verification = payload?.verificationRequired === true
+            ctx.status(verification ? 422 : 403)
+            return ctx.json({ success: false, error: 'no url', code: verification ? 'MUSIC_VERIFICATION_REQUIRED' : 'MUSIC_URL_UNAVAILABLE' })
         }
         if (server === 'qishui' && payload?.auth) {
             const wrapped = wrapQishuiPlayPayload(ctx, payload)

@@ -40,7 +40,7 @@ describe('后台接口稳定性', () => {
         vi.restoreAllMocks()
     })
 
-    it('FM 上游异常时返回可消费的空列表，不返回 502', async () => {
+    it('FM 上游超时时明确返回 504 和超时错误码', async () => {
         const app = createApp()
         vi.spyOn(Providers.prototype, 'get').mockReturnValue({
             support_type: ['fm'],
@@ -54,8 +54,8 @@ describe('后台接口稳定性', () => {
             body: JSON.stringify({ platform: 'netease', cookie: 'MUSIC_U=test-cookie' }),
         })
 
-        expect(response.status).toBe(200)
-        expect(await response.json()).toMatchObject({ success: true, data: [] })
+        expect(response.status).toBe(504)
+        expect(await response.json()).toMatchObject({ success: false, data: [], code: 'UPSTREAM_TIMEOUT' })
     })
 
     it('接口错误响应会写入接口日志', async () => {

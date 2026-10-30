@@ -13,6 +13,7 @@ import Providers from '../providers/index.js'
 import { get_url } from '../util.js'
 import { wrapQishuiPlayPayload } from '../providers/qishui/audio.js'
 import { parseNeteasePagination } from '../service/netease-pagination.js'
+import { musicFailure } from '../service/music-errors.js'
 
 /**
  * 汽水二次验证 iframe 专用鉴权。
@@ -420,24 +421,30 @@ export const adminRoutes = (app) => {
         const providers = new Providers()
         const provider = providers.get(server)
         if (!provider || !provider.support_type.includes(type)) {
-            return c.json({ success: false, error: '房间私有接口参数无效' }, 400)
+            return c.json({ success: false, error: '房间私有接口参数无效', code: 'INVALID_MUSIC_REQUEST' }, 400)
         }
-        if (!cookie) return c.json({ success: false, error: '房间音源登录凭证为空' }, 400)
+        if (!cookie) return c.json({ success: false, error: '房间音源登录凭证为空', code: 'MUSIC_COOKIE_REQUIRED' }, 400)
+        c.set('apiLogContext', { platform: server })
         const pagination = parseNeteasePagination(c.req.query(), server, type)
         if (pagination === null) {
-            return c.json({ success: false, error: '分页参数不合法：limit 为 1-100，page 从 1 开始，offset 从 0 开始' }, 400)
+            return c.json({ success: false, error: '分页参数不合法：limit 为 1-100，page 从 1 开始，offset 从 0 开始', code: 'INVALID_PAGINATION' }, 400)
         }
         try {
             let data = await provider.handle(type, id, cookie, { quality: c.req.query('quality'), ...pagination })
             if (server === 'qishui' && type === 'url' && data?.url && data?.auth) {
                 data = wrapQishuiPlayPayload(c, data)
             }
+            if (type === 'url' && (!data || (typeof data === 'object' && !data.url))) {
+                const verification = data?.verificationRequired === true
+                return c.json({ success: false, code: verification ? 'MUSIC_VERIFICATION_REQUIRED' : 'MUSIC_URL_UNAVAILABLE', error: verification ? '音乐账号需要完成官方验证' : 'no url' }, verification ? 422 : 403)
+            }
             if (type === 'url' && data && typeof data === 'object') {
                 return c.json({ ...data, loudness: data.loudness || null })
             }
             return c.json(data)
         } catch (error) {
-            return c.json({ success: false, error: '房间私有音源请求失败', code: 'UPSTREAM_REQUEST_FAILED' }, 502)
+            const { status, ...failure } = musicFailure(error, server)
+            return c.json(failure, status)
         }
     })
 
@@ -448,11 +455,12 @@ export const adminRoutes = (app) => {
         const mode = String(body.mode || '').trim()
         const excludeIds = new Set(Array.isArray(body.excludeIds) ? body.excludeIds.map((id) => String(id).trim()).filter(Boolean) : [])
         if (!['netease', 'tencent', 'qishui', 'kugou'].includes(platform) || !cookie) {
-            return c.json({ success: false, error: '漫游平台或登录凭证无效' }, 400)
+            return c.json({ success: false, error: '漫游平台或登录凭证无效', code: 'INVALID_FM_REQUEST' }, 400)
         }
+        c.set('apiLogContext', { platform })
         const provider = new Providers().get(platform)
         if (!provider?.support_type?.includes('fm')) {
-            return c.json({ success: false, error: '该平台暂不支持漫游' }, 400)
+            return c.json({ success: false, error: '该平台暂不支持漫游', code: 'FM_NOT_SUPPORTED' }, 400)
         }
         try {
             for (let batch = 0; batch < (platform === 'qishui' ? 3 : 1); batch += 1) {
@@ -464,19 +472,11 @@ export const adminRoutes = (app) => {
                     .sort(() => Math.random() - 0.5)
                 if (candidates.length) return c.json({ success: true, data: candidates })
             }
-            return c.json({ success: false, error: '连续几批漫游歌曲都暂时没有可用候选' }, 403)
+            return c.json({ success: true, data: [] })
         } catch (error) {
-            console.warn('[Admin FM] 上游请求失败', JSON.stringify({ platform, message: error?.message || String(error) }))
-            await store.addApiLog({
-                method: c.req.method,
-                path: c.req.path,
-                status: 200,
-                level: 'warning',
-                platform,
-                error: error?.message || '漫游歌曲获取失败',
-                code: 'UPSTREAM_REQUEST_FAILED',
-            })
-            return c.json({ success: true, data: [], warning: '漫游暂时不可用，请稍后重试' })
+            const { status, ...failure } = musicFailure(error, platform)
+            console.warn('[Admin FM] 上游请求失败', JSON.stringify({ platform, code: failure.code }))
+            return c.json({ ...failure, data: [] }, status)
         }
     })
 

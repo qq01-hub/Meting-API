@@ -229,21 +229,14 @@ export const buildKugouFmRequest = (cookie = {}, clienttime = Date.now()) => {
 }
 
 const personalFm = async (cookie) => {
-  try {
-    const request = buildKugouFmRequest(cookie)
-    const data = await requestKugou(request.path, {
-      method: request.method,
-      body: request.body,
-      cookie,
-      headers: { 'x-router': request.router },
-    })
-    return extractSongs(data)
-  } catch (error) {
-    // Personal FM is an optional Kugou feature; upstream rejection or outage
-    // should result in an empty provider response, not a unified API 500.
-    if (isKugouNonFatalError(error)) return []
-    throw error
-  }
+  const request = buildKugouFmRequest(cookie)
+  const data = await requestKugou(request.path, {
+    method: request.method,
+    body: request.body,
+    cookie,
+    headers: { 'x-router': request.router },
+  })
+  return extractSongs(data)
 }
 
 export const buildKugouSongRequest = (id) => {

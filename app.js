@@ -29,14 +29,19 @@ app.use('*', async (context, next) => {
         try {
             const apiLogContext = context.get('apiLogContext') || {}
             const internalError = context.get('httpError') || ''
+            let payload
+            try { payload = JSON.parse(response) } catch {}
+            const code = typeof payload?.code === 'string' ? payload.code : ''
+            const accountUnavailable = code === 'MUSIC_ACCOUNT_UNAVAILABLE'
             await store.addApiLog({
                 method: context.req.method,
                 path,
                 status: context.res.status,
-                level: 'error',
+                level: context.res.status >= 500 && !accountUnavailable ? 'error' : 'warning',
+                code,
                 platform: apiLogContext.platform || '',
                 cookieId: apiLogContext.cookieId || '',
-                error: internalError || response,
+                error: internalError || (typeof payload?.error === 'string' ? payload.error : response),
             })
         } catch (error) {
             console.error('[HTTP] 接口日志写入失败', error?.message || error)

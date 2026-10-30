@@ -31,7 +31,7 @@ describe('FM account selection', () => {
         expect(apiLog).not.toHaveBeenCalled()
     })
 
-    it('returns an empty FM list after every eligible account fails instead of 502', async () => {
+    it('returns a typed upstream failure after every eligible FM account fails', async () => {
         const selected = { id: 'selected', platform: 'netease', cookie: 'SELECTED', isActive: true, isValid: true, userInfo: { canPlayVip: true } }
         vi.spyOn(store, 'getActiveCookieForFm').mockReturnValue(selected)
         vi.spyOn(store, 'getFallbackCookieForFm').mockReturnValue(null)
@@ -44,8 +44,8 @@ describe('FM account selection', () => {
             status: vi.fn(), json: vi.fn(value => value),
         }
 
-        expect(await api(ctx)).toEqual([])
-        expect(ctx.status).not.toHaveBeenCalledWith(502)
+        expect(await api(ctx)).toMatchObject({ success: false, code: 'UPSTREAM_REQUEST_FAILED' })
+        expect(ctx.status).toHaveBeenCalledWith(502)
     })
 
     it.each(['netease', 'tencent', 'qishui', 'kugou'])('%s URL failure switches to another eligible account', async (server) => {
@@ -119,8 +119,8 @@ describe('FM account selection', () => {
             const handle = vi.fn()
             vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle })
             const ctx = { req: { query: () => ({ server, type: 'url', id: 'song', fm }), header: () => '' }, json: vi.fn(value => value), status: vi.fn() }
-            expect(await api(ctx)).toEqual({ error: 'no url' })
-            expect(ctx.status).toHaveBeenCalledWith(403)
+            expect(await api(ctx)).toEqual({ success: false, error: '音源暂无可用账号，请稍后重试', code: 'MUSIC_ACCOUNT_UNAVAILABLE' })
+            expect(ctx.status).toHaveBeenCalledWith(503)
             expect(handle).not.toHaveBeenCalled()
         })
     })
@@ -146,7 +146,7 @@ describe('FM account selection', () => {
         expect(song.url).toContain('id=song-id')
         expect(song.url).toContain('fm=1')
         expect(handle).toHaveBeenCalledWith('fm', '6907557348', 'FM_COOKIE', expect.any(Object))
-        expect(await api(context('url', 'song-id'))).toEqual({ error: 'no url' })
+        expect(await api(context('url', 'song-id'))).toEqual({ success: false, error: 'no url', code: 'MUSIC_URL_UNAVAILABLE' })
         await api(context('fm'))
 
         expect(fmCookie.isValid).toBe(true)
@@ -203,7 +203,7 @@ describe('FM account selection', () => {
         vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle: vi.fn().mockResolvedValue(null) })
         const ctx = { req: { query: () => ({ server: 'tencent', type: 'url', id: '0010BrWk2SucQr' }), header: () => '' }, status: vi.fn(), json: vi.fn(value => value) }
         try {
-            expect(await api(ctx)).toEqual({ error: 'no url' })
+            expect(await api(ctx)).toEqual({ success: false, error: 'no url', code: 'MUSIC_URL_UNAVAILABLE' })
             expect(account).toMatchObject({ urlErrorCount: 3, lastFailedSongmid: '0010BrWk2SucQr' })
         } finally {
             store.cookies.delete(account.id)
@@ -222,7 +222,8 @@ describe('FM account selection', () => {
             .mockResolvedValueOnce({ json: async () => ({ req_0: { code: 104009, data: { validUrl: 'https://c.y.qq.com/r/fy6U?tokenValid=test', midurlinfo: [{ purl: '' }] } } }) }))
         const ctx = { req: { query: () => ({ server: 'tencent', type: 'url', id: '0010BrWk2SucQr' }), header: () => '' }, status: vi.fn(), json: vi.fn(value => value) }
         try {
-            expect(await api(ctx)).toEqual({ error: 'no url' })
+            expect(await api(ctx)).toEqual({ success: false, error: 'no url', code: 'MUSIC_VERIFICATION_REQUIRED' })
+            expect(ctx.status).toHaveBeenCalledWith(422)
             expect(account).toMatchObject({ urlErrorCount: 1, tencentVerificationSongmid: '0010BrWk2SucQr' })
             vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6 * 60 * 1000)
             expect(getTencentVerification(account.cookie)).toBeNull()
@@ -292,7 +293,7 @@ describe('FM account selection', () => {
         vi.spyOn(console, 'warn').mockImplementation(() => {})
         const ctx = { req: { query: () => ({ server: 'tencent', type: 'url', id: 'song' }), header: () => '' }, status: vi.fn(), json: vi.fn(value => value) }
         try {
-            expect(await api(ctx)).toEqual({ error: 'no url' })
+            expect(await api(ctx)).toEqual({ success: false, error: 'no url', code: 'MUSIC_URL_UNAVAILABLE' })
             expect(ctx.status).toHaveBeenCalledWith(403)
             expect(handle.mock.calls.map(call => call[2])).toEqual(accounts.map(account => account.cookie))
             expect(accounts.map(account => account.urlErrorCount)).toEqual([1, 1, 1])
@@ -309,7 +310,8 @@ describe('FM account selection', () => {
         vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle })
         vi.spyOn(console, 'warn').mockImplementation(() => {})
         const ctx = { req: { query: () => ({ server: 'tencent', type: 'url', id: 'song' }), header: () => 'uin=explicit' }, status: vi.fn(), json: vi.fn(value => value) }
-        expect(await api(ctx)).toEqual({ error: 'no url' })
+        expect(await api(ctx)).toEqual({ success: false, error: 'no url', code: 'MUSIC_VERIFICATION_REQUIRED' })
+        expect(ctx.status).toHaveBeenCalledWith(422)
         expect(handle).toHaveBeenCalledTimes(1)
         expect(fallback).not.toHaveBeenCalled()
         expect(failure).not.toHaveBeenCalled()
@@ -321,8 +323,8 @@ describe('FM account selection', () => {
         const handle = vi.fn()
         vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle })
         const ctx = { req: { query: () => ({ server: 'tencent', type: 'url', id: 'song' }), header: () => '' }, status: vi.fn(), json: vi.fn(value => value) }
-        expect(await api(ctx)).toEqual({ error: 'no url' })
-        expect(ctx.status).toHaveBeenCalledWith(403)
+        expect(await api(ctx)).toEqual({ success: false, error: '音源暂无可用账号，请稍后重试', code: 'MUSIC_ACCOUNT_UNAVAILABLE' })
+        expect(ctx.status).toHaveBeenCalledWith(503)
         expect(handle).not.toHaveBeenCalled()
     })
 })

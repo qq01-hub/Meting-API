@@ -210,7 +210,7 @@ const requestJson = async (url, {
             throw error
         }
         const responseText = await response.text()
-        if (!response.ok) throw new Error(`汽水接口返回 ${response.status}`)
+        if (!response.ok) throw Object.assign(new Error(`汽水接口返回 ${response.status}`), { status: response.status })
         if (!responseText.trim()) {
             const cookieKeys = normalizeCookie(cookie).split(';').map(part => part.split('=')[0].trim()).filter(Boolean)
             const hasPcSession = cookieKeys.some(name => /^(sessionid|sid_tt|sid_guard|odin_tt)$/i.test(name))
@@ -734,7 +734,9 @@ const buildFeedPreference = (mode) => {
 }
 
 const get_personal_fm = async (mode, cookie) => {
-    if (!qishuiCookieHasLogin(cookie)) return []
+    if (!qishuiCookieHasLogin(cookie)) {
+        throw Object.assign(new Error('Cookie 缺少汽水登录态'), { code: 'MUSIC_ACCOUNT_INVALID' })
+    }
 
     // PC 客户端漫游使用 feed/song-tab，一次返回一批推荐歌曲；不再调用
     // 移动端发现页或电台接口。DEFAULT 由 PC 接口提供默认推荐，
@@ -792,8 +794,7 @@ const get_personal_fm = async (mode, cookie) => {
         }
         return songs
     } catch (error) {
-        console.warn('[Qishui] PC 漫游失败:', error.message)
-        return []
+        throw error
     }
 }
 

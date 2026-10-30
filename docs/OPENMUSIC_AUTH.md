@@ -22,6 +22,10 @@
 
 ## 协议
 
+- `/admin/fm` 和 `/admin/openmusic` 遇到明确的音乐账号登录失效时返回 HTTP 422、`success:false`、`code:MUSIC_ACCOUNT_INVALID` 和通用重新登录提示，OpenMusic 应停用该房间的旧凭证并回退公共 `/api?server=对应平台&type=fm`，公共回退不得携带 `X-OpenMusic-Cookie`
+- 推荐成功但没有候选时返回 HTTP 200 与空列表，网络超时返回 `504 UPSTREAM_TIMEOUT`，其他上游异常返回 `502 UPSTREAM_REQUEST_FAILED`，不再使用成功空列表隐藏异常，API Token 或签名鉴权失败不代表音乐账号失效
+- 公共池没有可用账号返回 `503 MUSIC_ACCOUNT_UNAVAILABLE`，曲目取链完成但无地址返回 `403 MUSIC_URL_UNAVAILABLE`，账号需要官方验证返回 `422 MUSIC_VERIFICATION_REQUIRED`，仅全部取链请求均异常时返回上游故障
+- 本次协议升级应先部署兼容旧响应的 OpenMusic，再部署 Meting，旧的 `200 success:false` 仅作兼容读取，新接口不能继续返回相互矛盾的成功状态
 - `X-OpenMusic-Assertion` 为 base64url 编码的 JSON，包含 `v=1`、`sub`、`purpose`、秒级 `ts` 和 18 随机字节的 base64url `nonce`
 - `purpose=account` 时 `sub` 必须为 OpenMusic 账户 ID，`purpose=system` 仅供受信任的健康探测、房间漫游等内部任务
 - 签名为使用对应 API Token 计算的 HMAC-SHA256，输入按换行连接 assertion 原文、大写方法、原始路径及查询参数、请求体 SHA256 十六进制摘要
