@@ -19,6 +19,22 @@ describe('Meting 全局 Cookie 优先级', () => {
         }
     })
 
+    it('为接口日志补充分流失败分类', async () => {
+        const save = vi.spyOn(store, 'saveToFile').mockResolvedValue()
+        const originalLogs = store.apiLogs
+        store.apiLogs = []
+        try {
+            const log = await store.addApiLog({
+                method: 'GET', path: '/api', status: 200, platform: 'netease',
+                cookieId: 'retry-account', code: 'URL_EMPTY_RESULT', error: '账号未返回播放链接',
+            })
+            expect(log.category).toBe('url_failover')
+        } finally {
+            store.apiLogs = originalLogs
+            save.mockRestore()
+        }
+    })
+
     it('新增接口日志后立即持久化', async () => {
         const save = vi.spyOn(store, 'saveToFile').mockResolvedValue()
         const originalLogs = store.apiLogs

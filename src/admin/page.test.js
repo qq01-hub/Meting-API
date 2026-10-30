@@ -9,6 +9,13 @@ it('shows each Cookie URL failure count in the admin list', () => {
     expect(html).toContain('slider-error-count')
 })
 
+it('shows interface log categories and error codes', () => {
+    const html = adminPageHandler({ html: value => value })
+    expect(html).toContain('<th>分类</th>')
+    expect(html).toContain('url_failover')
+    expect(html).toContain('(log.code || \'-\')')
+})
+
 it('renders a Tencent verification prompt in Cookie management', () => {
     const html = adminPageHandler({ html: value => value })
     expect(html).toContain('id="tencentVerifyBanner"')

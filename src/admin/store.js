@@ -27,6 +27,21 @@ const API_TOKENS_FILE = 'api_tokens.json'
 const COOKIE_KEY_FILE = 'cookie-encryption.key'
 const COOKIE_ENCRYPTION_PREFIX = 'enc:v1:'
 const API_LOG_DEDUPE_WINDOW_MS = 10 * 1000
+const API_LOG_CATEGORIES = {
+    URL_EMPTY_RESULT: 'url_failover',
+    URL_ACCOUNT_FAILED: 'url_failover',
+    URL_FAILOVER_FAILED: 'url_failover',
+    URL_VERIFICATION_REQUIRED: 'verification',
+    MUSIC_URL_UNAVAILABLE: 'url_failure',
+    MUSIC_VERIFICATION_REQUIRED: 'verification',
+    UPSTREAM_TIMEOUT: 'upstream',
+    UPSTREAM_REQUEST_FAILED: 'upstream',
+    MUSIC_ACCOUNT_INVALID: 'account',
+    MUSIC_ACCOUNT_UNAVAILABLE: 'account',
+}
+
+const getApiLogCategory = (code, status) => API_LOG_CATEGORIES[code]
+    || (Number(status) >= 500 ? 'upstream' : 'request')
 
 const MAX_LOGIN_ATTEMPTS = 5
 const LOCKOUT_DURATION = 15 * 60 * 1000
@@ -1385,6 +1400,7 @@ class DataStore {
         const log = {
             id: this.generateId(),
             timestamp: Date.now(),
+            category: logData.category || getApiLogCategory(logData.code, logData.status),
             ...logData,
         }
         const canDeduplicate = Boolean(log.platform && log.cookieId && log.error)

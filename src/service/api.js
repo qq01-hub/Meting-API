@@ -10,6 +10,8 @@ import { resolveLoudnessServiceUrl } from './loudness-config.js'
 import { parseNeteasePagination } from './netease-pagination.js'
 import { musicFailure } from './music-errors.js'
 
+const MAX_URL_FAILOVER_RETRIES = 3
+
 const recordApiLog = async (log) => {
     try {
         await store.addApiLog(log)
@@ -200,9 +202,11 @@ export default async (ctx) => {
         let url = payload?.url || ''
         let hadUrlResponse = initialRequestError === null
         let urlFailure = initialRequestError ? musicFailure(initialRequestError, server) : null
+        let failoverAttempted = false
         if (!url && storedCookie) {
             const attemptedIds = []
             const attemptedCookies = new Set()
+            let failoverRetries = 0
             while (!url && storedCookie) {
                 attemptedIds.push(storedCookie.id)
                 attemptedCookies.add(cookie)
@@ -218,6 +222,8 @@ export default async (ctx) => {
                     error: payload?.verificationRequired ? '账号要求验证' : initialRequestError?.message || '账号未返回播放链接',
                 })
                 initialRequestError = null
+                if (failoverRetries >= MAX_URL_FAILOVER_RETRIES) break
+                failoverRetries += 1
                 let fallbackCookie = null
                 try {
                     fallbackCookie = store.getFallbackCookieForQuality(server, quality || 'standard', attemptedIds)
@@ -233,6 +239,7 @@ export default async (ctx) => {
                     })
                 }
                 if (!fallbackCookie || attemptedCookies.has(fallbackCookie.cookie)) break
+                failoverAttempted = true
                 storedCookie = fallbackCookie
                 cookie = fallbackCookie.cookie
                 ctx.set?.('apiLogContext', { platform: server, cookieId: fallbackCookie.id })
@@ -261,7 +268,7 @@ export default async (ctx) => {
         }
         if (!url) {
             await flushPendingApiLogs()
-            if (!hadUrlResponse && urlFailure) {
+            if (!hadUrlResponse && urlFailure && !failoverAttempted) {
                 const { status, ...failure } = urlFailure
                 ctx.status(status)
                 return ctx.json(failure)

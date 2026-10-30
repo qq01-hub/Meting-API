@@ -1214,7 +1214,7 @@ const getAdminHtml = () => `<!DOCTYPE html>
                         </div>
                         <div class="table-container">
                             <table class="table">
-                                <thead><tr><th>时间</th><th>级别</th><th>方法</th><th>路径</th><th>平台</th><th>账号</th><th>状态</th><th>错误响应</th></tr></thead>
+                                <thead><tr><th>时间</th><th>级别</th><th>分类</th><th>方法</th><th>路径</th><th>平台</th><th>账号</th><th>状态</th><th>错误响应</th></tr></thead>
                                 <tbody id="apiLogsList"></tbody>
                             </table>
                         </div>
@@ -1963,12 +1963,21 @@ const getAdminHtml = () => `<!DOCTYPE html>
             if (!res?.success) return;
             const tbody = document.getElementById('apiLogsList');
             if (!res.data.length) {
-                tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><div class="empty-state-text">暂无接口错误日志</div></td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><div class="empty-state-text">暂无接口错误日志</div></td></tr>';
                 return;
             }
+            const categoryNames = {
+                url_failover: '分流重试',
+                url_failure: '播放地址',
+                verification: '账号验证',
+                upstream: '上游请求',
+                account: '账号状态',
+                request: '请求错误',
+            };
             tbody.innerHTML = res.data.map(log => '<tr>'
                 + '<td>' + formatDate(log.timestamp) + '</td>'
                 + '<td><span class="badge ' + (log.level === 'warning' ? 'badge-warning' : 'badge-error') + '">' + (log.level === 'warning' ? '警告' : '错误') + '</span></td>'
+                + '<td><span title="' + (log.code || '-') + '">' + (categoryNames[log.category] || log.category || '请求错误') + '</span><br><code>' + (log.code || '-') + '</code></td>'
                 + '<td>' + (log.method || '-') + '</td>'
                 + '<td><code>' + (log.path || '-') + '</code></td>'
                 + '<td>' + (log.platform || '-') + '</td>'

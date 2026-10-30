@@ -176,6 +176,58 @@ describe('FM account selection', () => {
         expect(fmCookie.isValid).toBe(true)
     })
 
+    it('stops URL failover after three retries', async () => {
+        const accounts = Array.from({ length: 5 }, (_, index) => ({
+            id: `url-retry-${index}`,
+            cookie: `URL_RETRY_${index}`,
+            isActive: true,
+            isValid: true,
+            userInfo: { canPlaySvip: true },
+        }))
+        vi.spyOn(store, 'getActiveCookieForQuality').mockReturnValue(accounts[0])
+        const fallback = vi.spyOn(store, 'getFallbackCookieForQuality')
+            .mockImplementation((_server, _quality, attemptedIds) => accounts.find(account => !attemptedIds.includes(account.id)) || null)
+        vi.spyOn(store, 'recordCookieUrlFailure').mockResolvedValue()
+        const handle = vi.fn().mockResolvedValue(null)
+        vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle })
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const ctx = {
+            req: { query: () => ({ server: 'netease', type: 'url', id: 'song-id' }), header: () => '' },
+            json: vi.fn(value => value), status: vi.fn(),
+        }
+
+        expect(await api(ctx)).toEqual({ success: false, error: 'no url', code: 'MUSIC_URL_UNAVAILABLE' })
+        expect(handle.mock.calls.map(call => call[2])).toEqual([
+            'URL_RETRY_0', 'URL_RETRY_1', 'URL_RETRY_2', 'URL_RETRY_3',
+        ])
+        expect(fallback).toHaveBeenCalledTimes(3)
+    })
+
+    it('returns no URL after three URL failover retries time out', async () => {
+        const accounts = Array.from({ length: 5 }, (_, index) => ({
+            id: `timeout-retry-${index}`,
+            cookie: `TIMEOUT_RETRY_${index}`,
+            isActive: true,
+            isValid: true,
+            userInfo: { canPlaySvip: true },
+        }))
+        vi.spyOn(store, 'getActiveCookieForQuality').mockReturnValue(accounts[0])
+        vi.spyOn(store, 'getFallbackCookieForQuality')
+            .mockImplementation((_server, _quality, attemptedIds) => accounts.find(account => !attemptedIds.includes(account.id)) || null)
+        vi.spyOn(store, 'recordCookieUrlFailure').mockResolvedValue()
+        const timeout = Object.assign(new Error('Meting 请求超时'), { name: 'TimeoutError' })
+        const handle = vi.fn().mockRejectedValue(timeout)
+        vi.spyOn(Providers.prototype, 'get').mockReturnValue({ support_type: ['url'], handle })
+        vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const ctx = {
+            req: { query: () => ({ server: 'netease', type: 'url', id: 'song-id' }), header: () => '' },
+            json: vi.fn(value => value), status: vi.fn(),
+        }
+
+        expect(await api(ctx)).toEqual({ success: false, error: 'no url', code: 'MUSIC_URL_UNAVAILABLE' })
+        expect(handle).toHaveBeenCalledTimes(4)
+    })
+
     it('returns the FM account URL without trying another account when it succeeds', async () => {
         const fmCookie = { id: 'fm', cookie: 'FM_COOKIE', isActive: true, isValid: true, userInfo: { canPlaySvip: true } }
         vi.spyOn(store, 'getActiveCookieForQuality').mockReturnValue(fmCookie)
