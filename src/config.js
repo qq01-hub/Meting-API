@@ -5,7 +5,7 @@ const runtime = get_runtime()
 
 if (['cloudflare', 'vercel'].includes(runtime)) OVERSEAS = true
 
-const PORT = globalThis?.Deno?.env?.get("PORT") || globalThis?.process?.env?.PORT || 5677
+const PORT = globalThis?.Deno?.env?.get("PORT") || globalThis?.process?.env?.PORT || 3000
 
 const LOUDNESS_SERVICE_URL = (
     globalThis?.Deno?.env?.get("LOUDNESS_SERVICE_URL")

@@ -52,6 +52,13 @@ describe('kugou provider contract', () => {
     })
   })
 
+  it('keeps empty legacy search responses compatible when status is zero without an error code', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ status: 0, msg: 'no results' }) })))
+    const registry = { register: (_, provider) => { registry.provider = provider } }
+    kugou.register(registry)
+    expect(await registry.provider.handle('search', 'missing-song')).toEqual([])
+  })
+
   it('only accepts collection ids for playlist requests', async () => {
     const { isKugouCollectionId } = await import('./index.js')
     expect(isKugouCollectionId('collection_3_975665376_1162_0')).toBe(true)
@@ -121,6 +128,11 @@ describe('kugou provider contract', () => {
   it('builds the tracker key required by the play-url endpoint', async () => {
     const { buildKugouTrackKey } = await import('./index.js')
     expect(buildKugouTrackKey('abcdef', { KUGOU_API_MID: 'device-mid', userid: '42' })).toBe('1caced7d174e717d08ddd25bc1990975')
+  })
+
+  it('preserves large account ids when building the tracker key', async () => {
+    const { buildKugouTrackKey } = await import('./index.js')
+    expect(buildKugouTrackKey('abcdef', { KUGOU_API_MID: 'device-mid', userid: '9007199254740993' })).toBe('612de8b6e57b7d927bf01a86ea7381bd')
   })
 
   it('reports the actual standard quality when an SVIP request returns a 128kbps MP3', async () => {

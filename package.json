@@ -1,6 +1,6 @@
 {
   "name": "openmusic-meting-api",
-  "version": "3.4.2",
+  "version": "3.4.3",
   "description": "",
   "main": "node.js",
   "scripts": {
