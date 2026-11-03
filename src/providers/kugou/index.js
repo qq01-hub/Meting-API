@@ -16,6 +16,34 @@ const H5_SIGN_SALT = 'NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt'
 const text = (value) => String(value ?? '').trim()
 const md5 = (value) => createHash('md5').update(String(value)).digest('hex')
 
+// 酷狗不同客户端的身份参数必须整组成套使用：appid / clientver / page_id / pid / ppage_id
+// 与两级盐值（tracker key 盐、请求签名盐）任意一项错配，接口都会返回 illegal key 或 err signature。
+// lite = 概念版（本 provider 已有的登录体系），standard = 标准版（曲库更全，匿名即可播 128k/320k）。
+export const KUGOU_PROFILES = {
+  lite: {
+    name: 'lite',
+    appid: LITE_APPID,
+    clientver: LITE_CLIENTVER,
+    signSalt: SIGN_SALT,
+    trackSalt: TRACK_KEY_SALT,
+    pageId: 967177915,
+    pid: 411,
+    ppageId: '356753938,823673182,967485191',
+    isFreePart: 1,
+  },
+  standard: {
+    name: 'standard',
+    appid: 1005,
+    clientver: 11430,
+    signSalt: 'OIlwieks28dk2k092lksi2UIkp',
+    trackSalt: '57ae12eb6890223e355ccfcb74edf70d',
+    pageId: 151369488,
+    pid: 2,
+    ppageId: '463467626,350369493,788954147',
+    isFreePart: 0,
+  },
+}
+
 export const isKugouShareCode = (value = '') => /^\d{8,20}$/.test(text(value))
 
 export const buildKugouShareKey = (data, appid = SHARE_APPID, clientver = SHARE_CLIENTVER) =>
@@ -78,9 +106,10 @@ export const parseKugouCookie = (raw = '') => Object.fromEntries(text(raw).split
 export const isKugouMembershipRequestParamError = (error) => [20010, 20017].includes(Number(error?.code || error?.error_code))
 export const isKugouNonFatalError = (error) => {
   const code = Number(error?.code || error?.error_code || error?.status)
-  return code === 20010 || code === 200101 || code === 31863 || (code >= 500 && code < 600)
+  // 20028 = 本次请求需要验证（SSA 风控），换一个身份重试通常即可，不该变成整站 500
+  return code === 20010 || code === 20028 || code === 200101 || code === 31863 || (code >= 500 && code < 600)
 }
-export const buildKugouTrackKey = (hash, cookie = {}) => md5(`${text(hash).toLowerCase()}${TRACK_KEY_SALT}${LITE_APPID}${buildKugouDevice(cookie).mid}${Number(cookie.userid) || 0}`)
+export const buildKugouTrackKey = (hash, cookie = {}, profile = KUGOU_PROFILES.lite) => md5(`${text(hash).toLowerCase()}${profile.trackSalt}${profile.appid}${buildKugouDevice(cookie, profile).mid}${Number(cookie.userid) || 0}`)
 export const normalizeKugouId = (id) => {
   const [hash = '', albumAudioId = '0'] = text(id).split(',')
   return { hash: hash.toLowerCase(), albumAudioId: Number(albumAudioId) || 0 }
@@ -115,22 +144,22 @@ export const mapKugouSong = (song = {}) => {
   }
 }
 
-export const buildKugouDevice = (cookie = {}) => ({
+export const buildKugouDevice = (cookie = {}, profile = KUGOU_PROFILES.lite) => ({
   dfid: text(cookie.dfid || cookie.kg_dfid || '-'),
   mid: text(cookie.KUGOU_API_MID || cookie.mid || cookie.kg_mid || MID),
   uuid: '-',
-  appid: LITE_APPID,
-  clientver: LITE_CLIENTVER,
+  appid: profile.appid,
+  clientver: profile.clientver,
 })
 
-export const requestKugou = async (path, { params = {}, method = 'GET', body, cookie = {}, base = API_BASE, headers = {}, signed = true } = {}) => {
-  const device = buildKugouDevice(cookie)
+export const requestKugou = async (path, { params = {}, method = 'GET', body, cookie = {}, base = API_BASE, headers = {}, signed = true, profile = KUGOU_PROFILES.lite } = {}) => {
+  const device = buildKugouDevice(cookie, profile)
   const clienttime = Math.floor(Date.now() / 1000)
   const allParams = signed ? { ...device, clienttime, ...params } : { ...params }
   if (signed && cookie.token) allParams.token = cookie.token
   if (signed && cookie.userid) allParams.userid = cookie.userid
   const bodyText = body === undefined ? '' : JSON.stringify(body)
-  if (signed) allParams.signature = buildKugouSignature(allParams, bodyText)
+  if (signed) allParams.signature = buildKugouSignature(allParams, bodyText, profile.signSalt)
   const url = new URL(path, base)
   Object.entries(allParams).forEach(([key, value]) => url.searchParams.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value)))
   const response = await fetch(url, {
@@ -429,35 +458,86 @@ export const mapKugouMembership = (payload = {}, cookie = {}) => {
   const isVip = isSvip || [data.is_vip, data.isVip, data.vip, data.vip_status, data.vipStatus].some(positive) || vipType > 0
   return { vipType, isVip, isSvip, canPlayVip: isVip, canPlaySvip: isSvip }
 }
+const KUGOU_FAIL_LABELS = {
+  pkg: '版权受限',
+  buy: '需购买/会员',
+  vip: '需会员',
+  ssa: '需要验证',
+}
+
+/**
+ * 选择主用身份：显式标注平台时以标注为准；没有标注时，带登录凭证沿用 lite
+ * （Meting 的扫码登录是 lite appid 体系签发的 token），匿名则走标准版。
+ */
+export const resolveKugouProfile = (cookie = {}) => {
+  const platform = text(cookie.KUGOU_API_PLATFORM || cookie.kg_platform).toLowerCase()
+  if (platform === 'lite') return KUGOU_PROFILES.lite
+  if (platform === 'standard') return KUGOU_PROFILES.standard
+  return text(cookie.token) ? KUGOU_PROFILES.lite : KUGOU_PROFILES.standard
+}
+
+const otherKugouProfile = (profile) => (profile.name === 'lite' ? KUGOU_PROFILES.standard : KUGOU_PROFILES.lite)
+
+/** 降级重试时用的匿名身份：不带 token/userid，dfid 回退为 '-'，避免身份与 appid 错配触发风控。 */
+const anonymousKugouCookie = (cookie = {}) => ({ ...cookie, token: '', userid: '', dfid: '-', __raw: '' })
+
+export const buildKugouAudioParams = (hash, albumAudioId, requested, cookie, profile = KUGOU_PROFILES.lite) => ({
+  album_id: 0, area_code: 1, hash, ssa_flag: 'is_fromtrack', version: 11430,
+  page_id: profile.pageId, quality: requested.request, album_audio_id: albumAudioId,
+  behavior: 'play', pid: profile.pid, cmd: 26, pidversion: 3001, cdnBackup: 1,
+  IsFreePart: profile.isFreePart, ppage_id: profile.ppageId, module: '',
+  key: buildKugouTrackKey(hash, cookie, profile),
+})
+
+const requestKugouAudioInfo = async (hash, albumAudioId, requested, cookie, profile) => {
+  const data = await requestKugou('/v5/url', {
+    params: buildKugouAudioParams(hash, albumAudioId, requested, cookie, profile),
+    cookie,
+    profile,
+    headers: { 'x-router': 'trackercdn.kugou.com' },
+  })
+  return data?.data || data
+}
+
+const describeKugouAudioFailure = (info = {}) => {
+  const steps = Array.isArray(info?.fail_process) ? info.fail_process : []
+  const label = steps.map((step) => KUGOU_FAIL_LABELS[step] || step).join(' / ')
+  return text(label || info?.error_msg || info?.error || '')
+}
+
 const audioUrl = async (id, quality, cookie) => {
   const { hash, albumAudioId } = normalizeKugouId(id)
   const requested = getKugouQuality(quality)
-  let data
-  try {
-    data = await requestKugou('/v5/url', {
-      params: {
-        album_id: 0, area_code: 1, hash, ssa_flag: 'is_fromtrack', version: 11430,
-        page_id: 967177915, quality: requested.request, album_audio_id: albumAudioId,
-        behavior: 'play', pid: 411, cmd: 26, pidversion: 3001, cdnBackup: 1,
-        IsFreePart: 1, ppage_id: '356753938,823673182,967485191', module: '',
-        key: buildKugouTrackKey(hash, cookie),
-      },
-      cookie, headers: { 'x-router': 'trackercdn.kugou.com' },
-    })
-  } catch (error) {
-    if (isKugouNonFatalError(error)) return { url: '', reason: text(error.message || '该曲目当前无可播放地址') }
-    throw error
+  const primary = resolveKugouProfile(cookie)
+  // 同一个 hash 在概念版曲库可能只有 status=3（无可用音质），标准版却能直接给 128k/320k，
+  // 所以主身份拿不到地址时用另一套完整身份（匿名）再试一次。
+  const attempts = [
+    { profile: primary, cookie },
+    { profile: otherKugouProfile(primary), cookie: anonymousKugouCookie(cookie) },
+  ]
+  let reason = ''
+  for (const attempt of attempts) {
+    let info
+    try {
+      info = await requestKugouAudioInfo(hash, albumAudioId, requested, attempt.cookie, attempt.profile)
+    } catch (error) {
+      if (!isKugouNonFatalError(error)) throw error
+      reason = text(error.message) || reason
+      continue
+    }
+    const url = [info?.play_url, info?.url, info?.ori_url, info?.backupUrl, info?.backup_url].flat().find(Boolean) || ''
+    if (url) {
+      const actual = getKugouActualQuality(info)
+      return {
+        url, quality: actual.name,
+        duration: Number(info?.timeLength || info?.duration || 0) || undefined,
+        loudness: mapKugouLoudness(info),
+        pic: imageUrl(info?.trans_param?.union_cover || info?.img || info?.image),
+      }
+    }
+    reason = describeKugouAudioFailure(info) || reason
   }
-  const info = data?.data || data
-  const url = [info?.play_url, info?.url, info?.ori_url, info?.backupUrl, info?.backup_url].flat().find(Boolean) || ''
-  const actual = getKugouActualQuality(info)
-  return {
-    url, quality: actual.name,
-    duration: Number(info?.timeLength || info?.duration || 0) || undefined,
-    loudness: mapKugouLoudness(info),
-    pic: imageUrl(info?.trans_param?.union_cover || info?.img || info?.image),
-    ...(url ? {} : { reason: text(info?.fail_process?.join(' / ') || info?.error_msg || '该曲目当前无可播放地址') }),
-  }
+  return { url: '', reason: reason || '该曲目当前无可播放地址' }
 }
 const lyric = async (id, cookie) => {
   const { hash } = normalizeKugouId(id)
