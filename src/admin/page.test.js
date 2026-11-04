@@ -42,3 +42,11 @@ it('keeps the Qishui verification iframe same-origin and capable for the officia
     }
     expect(html).not.toContain('sandbox="allow-scripts"></iframe>')
 })
+
+it('renders the daily data backup toggle enabled by default in admin settings', () => {
+    const html = adminPageHandler({ html: value => value })
+    expect(html).toContain('id="backupConfigSection"')
+    expect(html).toContain('id="backupConfigForm"')
+    expect(html).toContain('id="backupEnabled" aria-describedby="backupConfigHelp" checked')
+    expect(html).toContain('/admin/config/backup')
+})

@@ -25,6 +25,11 @@ const MONITOR_LOGS_FILE = 'monitor_logs.json'
 const API_LOGS_FILE = 'api_logs.json'
 const API_TOKENS_FILE = 'api_tokens.json'
 const COOKIE_KEY_FILE = 'cookie-encryption.key'
+const BACKUP_DIR_NAME = 'backups'
+const BACKUP_EXCLUDED_NAMES = new Set([
+    BACKUP_DIR_NAME,
+    'qishui-audio-cache',
+])
 const COOKIE_ENCRYPTION_PREFIX = 'enc:v1:'
 const API_LOG_DEDUPE_WINDOW_MS = 10 * 1000
 const API_LOG_CATEGORIES = {
@@ -126,6 +131,14 @@ export const selectCookieForQuality = (cookies, quality, platform, preferFm = fa
 export const selectRequestCookie = (explicitCookie, storedCookie) =>
     String(explicitCookie || '').trim() || storedCookie?.cookie || ''
 
+export const formatBackupDate = (value = new Date()) => {
+    const date = value instanceof Date ? value : new Date(value)
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+}
+
 const generateSecret = () => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
     let secret = ''
@@ -197,7 +210,19 @@ class DataStore {
         this.apiLogs = []
         this.apiTokens = new Map()
         this.cookieEncryptionKey = null
+        this.dataDir = DATA_DIR
+        this.backupTimer = null
+        this.lastBackupDate = null
+        this.isBackingUp = false
         this.initialized = false
+    }
+
+    getDataDir() {
+        return this.dataDir || globalThis?.process?.env?.DATA_DIR || DATA_DIR
+    }
+
+    getBackupDir() {
+        return path.join(this.getDataDir(), BACKUP_DIR_NAME)
     }
 
     async init() {
@@ -205,8 +230,9 @@ class DataStore {
         
         if (isServerRuntime && runtime === 'node') {
             try {
-                if (!fs.existsSync(DATA_DIR)) {
-                    fs.mkdirSync(DATA_DIR, { recursive: true })
+                const dataDir = this.getDataDir()
+                if (!fs.existsSync(dataDir)) {
+                    fs.mkdirSync(dataDir, { recursive: true })
                 }
                 this.initCookieEncryptionKey()
                 await this.loadFromFile()
@@ -225,6 +251,13 @@ class DataStore {
                 createdAt: Date.now()
             })
             await this.saveToFile()
+        }
+
+        if (isServerRuntime && runtime === 'node') {
+            this.syncBackupSchedule()
+            if (this.isBackupEnabled()) {
+                await this.performDailyBackup()
+            }
         }
         
         this.initialized = true
@@ -263,7 +296,7 @@ class DataStore {
         }
 
         const keyPath = globalThis?.process?.env?.METING_COOKIE_KEY_FILE
-            || path.join(DATA_DIR, COOKIE_KEY_FILE)
+            || path.join(this.getDataDir(), COOKIE_KEY_FILE)
         if (fs.existsSync(keyPath)) {
             const key = this.parseCookieEncryptionKey(fs.readFileSync(keyPath, 'utf-8'))
             if (!key) throw new Error(`Cookie 加密密钥文件无效: ${keyPath}`)
@@ -323,7 +356,8 @@ class DataStore {
                 cookie: this.encryptCookieValue(cookie.cookie, id, cookie.platform),
             }
         }
-        const cookiesPath = path.join(DATA_DIR, COOKIES_FILE)
+        const dataDir = this.getDataDir()
+        const cookiesPath = path.join(dataDir, COOKIES_FILE)
         const temporaryPath = `${cookiesPath}.tmp`
         fs.writeFileSync(temporaryPath, JSON.stringify(encrypted, null, 2), { mode: 0o600 })
         fs.renameSync(temporaryPath, cookiesPath)
@@ -334,7 +368,8 @@ class DataStore {
         if (runtime !== 'node') return
         
         try {
-            const cookiesPath = path.join(DATA_DIR, COOKIES_FILE)
+            const dataDir = this.getDataDir()
+            const cookiesPath = path.join(dataDir, COOKIES_FILE)
             if (fs.existsSync(cookiesPath)) {
                 const data = JSON.parse(fs.readFileSync(cookiesPath, 'utf-8'))
                 this.cookies = new Map(Object.entries(data))
@@ -361,40 +396,40 @@ class DataStore {
                 }
             }
             
-            const usersPath = path.join(DATA_DIR, USERS_FILE)
+            const usersPath = path.join(dataDir, USERS_FILE)
             if (fs.existsSync(usersPath)) {
                 const data = JSON.parse(fs.readFileSync(usersPath, 'utf-8'))
                 this.users = new Map(Object.entries(data))
             }
             
-            const logsPath = path.join(DATA_DIR, LOGS_FILE)
+            const logsPath = path.join(dataDir, LOGS_FILE)
             if (fs.existsSync(logsPath)) {
                 this.logs = JSON.parse(fs.readFileSync(logsPath, 'utf-8'))
             }
             
-            const securityPath = path.join(DATA_DIR, SECURITY_FILE)
+            const securityPath = path.join(dataDir, SECURITY_FILE)
             if (fs.existsSync(securityPath)) {
                 const data = JSON.parse(fs.readFileSync(securityPath, 'utf-8'))
                 this.loginAttempts = new Map(Object.entries(data.loginAttempts || {}))
                 this.lockedAccounts = new Map(Object.entries(data.lockedAccounts || {}))
             }
             
-            const configPath = path.join(DATA_DIR, CONFIG_FILE)
+            const configPath = path.join(dataDir, CONFIG_FILE)
             if (fs.existsSync(configPath)) {
                 this.config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
             }
             
-            const monitorLogsPath = path.join(DATA_DIR, MONITOR_LOGS_FILE)
+            const monitorLogsPath = path.join(dataDir, MONITOR_LOGS_FILE)
             if (fs.existsSync(monitorLogsPath)) {
                 this.monitorLogs = JSON.parse(fs.readFileSync(monitorLogsPath, 'utf-8'))
             }
 
-            const apiLogsPath = path.join(DATA_DIR, API_LOGS_FILE)
+            const apiLogsPath = path.join(dataDir, API_LOGS_FILE)
             if (fs.existsSync(apiLogsPath)) {
                 this.apiLogs = JSON.parse(fs.readFileSync(apiLogsPath, 'utf-8'))
             }
             
-            const apiTokensPath = path.join(DATA_DIR, API_TOKENS_FILE)
+            const apiTokensPath = path.join(dataDir, API_TOKENS_FILE)
             if (fs.existsSync(apiTokensPath)) {
                 const data = JSON.parse(fs.readFileSync(apiTokensPath, 'utf-8'))
                 this.apiTokens = new Map(Object.entries(data))
@@ -408,37 +443,178 @@ class DataStore {
         if (runtime !== 'node') return
         
         try {
+            const dataDir = this.getDataDir()
             this.saveCookiesFile()
             
-            const usersPath = path.join(DATA_DIR, USERS_FILE)
+            const usersPath = path.join(dataDir, USERS_FILE)
             fs.writeFileSync(usersPath, JSON.stringify(Object.fromEntries(this.users), null, 2))
             
-            const logsPath = path.join(DATA_DIR, LOGS_FILE)
+            const logsPath = path.join(dataDir, LOGS_FILE)
             const recentLogs = this.logs.slice(-1000)
             fs.writeFileSync(logsPath, JSON.stringify(recentLogs, null, 2))
             
-            const securityPath = path.join(DATA_DIR, SECURITY_FILE)
+            const securityPath = path.join(dataDir, SECURITY_FILE)
             const securityData = {
                 loginAttempts: Object.fromEntries(this.loginAttempts),
                 lockedAccounts: Object.fromEntries(this.lockedAccounts)
             }
             fs.writeFileSync(securityPath, JSON.stringify(securityData, null, 2))
             
-            const configPath = path.join(DATA_DIR, CONFIG_FILE)
+            const configPath = path.join(dataDir, CONFIG_FILE)
             fs.writeFileSync(configPath, JSON.stringify(this.config, null, 2))
             
-            const monitorLogsPath = path.join(DATA_DIR, MONITOR_LOGS_FILE)
+            const monitorLogsPath = path.join(dataDir, MONITOR_LOGS_FILE)
             const recentMonitorLogs = this.monitorLogs.slice(-500)
             fs.writeFileSync(monitorLogsPath, JSON.stringify(recentMonitorLogs, null, 2))
 
-            const apiLogsPath = path.join(DATA_DIR, API_LOGS_FILE)
+            const apiLogsPath = path.join(dataDir, API_LOGS_FILE)
             const recentApiLogs = this.apiLogs.slice(-1000)
             fs.writeFileSync(apiLogsPath, JSON.stringify(recentApiLogs, null, 2))
             
-            const apiTokensPath = path.join(DATA_DIR, API_TOKENS_FILE)
+            const apiTokensPath = path.join(dataDir, API_TOKENS_FILE)
             fs.writeFileSync(apiTokensPath, JSON.stringify(Object.fromEntries(this.apiTokens), null, 2))
+
+            if (this.initialized && this.isBackupEnabled() && !this.isBackingUp) {
+                await this.performDailyBackup()
+            }
         } catch (e) {
             console.error('Save data error:', e.message)
+        }
+    }
+
+    writeDataSnapshotToDir(targetDir) {
+        if (runtime !== 'node') return
+        if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true })
+        }
+
+        const encryptedCookies = {}
+        for (const [id, cookie] of this.cookies) {
+            encryptedCookies[id] = {
+                ...cookie,
+                cookie: this.cookieEncryptionKey
+                    ? this.encryptCookieValue(cookie.cookie, id, cookie.platform)
+                    : String(cookie.cookie || ''),
+            }
+        }
+        const cookiesBackupPath = path.join(targetDir, COOKIES_FILE)
+        fs.writeFileSync(cookiesBackupPath, JSON.stringify(encryptedCookies, null, 2), { mode: 0o600 })
+        try { fs.chmodSync(cookiesBackupPath, 0o600) } catch {}
+
+        fs.writeFileSync(path.join(targetDir, USERS_FILE), JSON.stringify(Object.fromEntries(this.users), null, 2))
+        fs.writeFileSync(path.join(targetDir, LOGS_FILE), JSON.stringify(this.logs.slice(-1000), null, 2))
+        fs.writeFileSync(path.join(targetDir, SECURITY_FILE), JSON.stringify({
+            loginAttempts: Object.fromEntries(this.loginAttempts),
+            lockedAccounts: Object.fromEntries(this.lockedAccounts),
+        }, null, 2))
+        fs.writeFileSync(path.join(targetDir, CONFIG_FILE), JSON.stringify(this.config, null, 2))
+        fs.writeFileSync(path.join(targetDir, MONITOR_LOGS_FILE), JSON.stringify(this.monitorLogs.slice(-500), null, 2))
+        fs.writeFileSync(path.join(targetDir, API_LOGS_FILE), JSON.stringify(this.apiLogs.slice(-1000), null, 2))
+        fs.writeFileSync(path.join(targetDir, API_TOKENS_FILE), JSON.stringify(Object.fromEntries(this.apiTokens), null, 2))
+
+        const dataDir = this.getDataDir()
+        const keyPath = globalThis?.process?.env?.METING_COOKIE_KEY_FILE
+            || path.join(dataDir, COOKIE_KEY_FILE)
+        if (fs.existsSync(keyPath)) {
+            const targetKeyPath = path.join(targetDir, COOKIE_KEY_FILE)
+            fs.copyFileSync(keyPath, targetKeyPath)
+            try { fs.chmodSync(targetKeyPath, 0o600) } catch {}
+        }
+
+        if (fs.existsSync(dataDir)) {
+            const entries = fs.readdirSync(dataDir, { withFileTypes: true })
+            for (const entry of entries) {
+                if (BACKUP_EXCLUDED_NAMES.has(entry.name)) continue
+                if (entry.name.endsWith('.tmp') || entry.name.endsWith('.log')) continue
+                const destPath = path.join(targetDir, entry.name)
+                if (fs.existsSync(destPath)) continue
+                const srcPath = path.join(dataDir, entry.name)
+                fs.cpSync(srcPath, destPath, { recursive: true })
+            }
+        }
+    }
+
+    cleanupPreviousBackups(currentDateKey) {
+        if (runtime !== 'node') return []
+        const backupRoot = this.getBackupDir()
+        if (!fs.existsSync(backupRoot)) return []
+        const removed = []
+        const entries = fs.readdirSync(backupRoot, { withFileTypes: true })
+        for (const entry of entries) {
+            if (entry.name === currentDateKey) continue
+            const fullPath = path.join(backupRoot, entry.name)
+            fs.rmSync(fullPath, { recursive: true, force: true })
+            removed.push(entry.name)
+        }
+        return removed
+    }
+
+    async performDailyBackup(options = {}) {
+        if (runtime !== 'node') return { success: false, skipped: true }
+        const { force = false, date = new Date() } = options
+        if (!force && !this.isBackupEnabled()) {
+            return { success: false, skipped: true, reason: 'disabled' }
+        }
+        if (this.isBackingUp) {
+            return { success: false, skipped: true, reason: 'in_progress' }
+        }
+
+        const dateKey = typeof date === 'string' ? date : formatBackupDate(date)
+        const backupRoot = this.getBackupDir()
+        const targetDir = path.join(backupRoot, dateKey)
+
+        this.isBackingUp = true
+        try {
+            if (!fs.existsSync(backupRoot)) {
+                fs.mkdirSync(backupRoot, { recursive: true })
+            }
+            this.writeDataSnapshotToDir(targetDir)
+            const removed = this.cleanupPreviousBackups(dateKey)
+            this.lastBackupDate = dateKey
+            return {
+                success: true,
+                date: dateKey,
+                backupPath: targetDir,
+                removedPrevious: removed,
+            }
+        } catch (e) {
+            console.error('Daily backup error:', e.message)
+            return { success: false, error: e.message }
+        } finally {
+            this.isBackingUp = false
+        }
+    }
+
+    stopBackupScheduler() {
+        if (this.backupTimer) {
+            clearTimeout(this.backupTimer)
+            this.backupTimer = null
+        }
+    }
+
+    scheduleNextDailyBackup(now = new Date()) {
+        this.stopBackupScheduler()
+        if (runtime !== 'node' || !this.isBackupEnabled()) return
+        const current = now instanceof Date ? now : new Date(now)
+        const nextMidnight = new Date(
+            current.getFullYear(),
+            current.getMonth(),
+            current.getDate() + 1,
+            0, 0, 5, 0,
+        )
+        const delayMs = Math.max(1000, nextMidnight.getTime() - current.getTime())
+        this.backupTimer = setTimeout(async () => {
+            await this.performDailyBackup()
+            this.scheduleNextDailyBackup()
+        }, delayMs)
+        this.backupTimer.unref?.()
+    }
+
+    syncBackupSchedule() {
+        if (this.isBackupEnabled()) {
+            this.scheduleNextDailyBackup()
+        } else {
+            this.stopBackupScheduler()
         }
     }
 
@@ -1237,6 +1413,7 @@ class DataStore {
     getConfig() {
         return {
             openmusicAuthEnabled: this.isOpenmusicAuthEnabled(),
+            backupEnabled: this.isBackupEnabled(),
             adminPath: this.config.adminPath || null,
             webhookUrl: this.config.webhookUrl || null,
             monitorEnabled: this.config.monitorEnabled || false,
@@ -1245,6 +1422,19 @@ class DataStore {
             loudnessServiceUrl: this.config.loudnessServiceUrl || null,
             fmPriorityCookieIds: { ...(this.config.fmPriorityCookieIds || {}) },
         }
+    }
+
+    isBackupEnabled() {
+        return this.config.backupEnabled !== false
+    }
+
+    async setBackupEnabled(enabled, operator = 'system') {
+        if (typeof enabled !== 'boolean') return { success: false, error: '数据备份开关必须是布尔值' }
+        this.config.backupEnabled = enabled
+        await this.addLog('config_update', `${enabled ? '开启' : '关闭'}每日数据备份`, operator)
+        await this.saveToFile()
+        this.syncBackupSchedule()
+        return { success: true, data: { backupEnabled: enabled } }
     }
 
     isOpenmusicAuthEnabled() {

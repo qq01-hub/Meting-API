@@ -242,6 +242,7 @@ GET /api?server=kugou&type=pic&id=72db6da75ffe23a3a6361bdb8f44d5f4
 - 汽水音乐扫码登录
 - 酷狗扫码登录与 API 凭证管理
 - 定时监测与 Webhook
+- 每日整体数据自动备份与轮转清理（默认开启，可在后台设置中开关）
 - 2FA 与多用户管理
 
 ### Cookie 配置要点

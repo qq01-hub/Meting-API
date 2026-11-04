@@ -1293,6 +1293,17 @@ const getAdminHtml = () => `<!DOCTYPE html>
                             </form>
                         </div>
 
+                        <div class="card settings-section" id="backupConfigSection">
+                            <h4>💾 数据备份</h4>
+                            <form id="backupConfigForm">
+                                <div class="form-group">
+                                    <label class="checkbox-label"><input type="checkbox" id="backupEnabled" aria-describedby="backupConfigHelp" checked> 启用每日整体数据备份</label>
+                                    <small id="backupConfigHelp">默认开启，每天自动将整体数据备份到数据目录下的 backups 子目录，并在第二天备份时自动删除前一天的备份<br>保存后立即生效，无需重启</small>
+                                </div>
+                                <button type="submit" class="btn btn-primary">保存备份设置</button>
+                            </form>
+                        </div>
+
                         <div class="card settings-section" id="adminPathSection">
                             <h4>🛡️ 安全设置</h4>
                             <form id="adminPathForm">
@@ -1701,6 +1712,7 @@ const getAdminHtml = () => `<!DOCTYPE html>
                 if (currentUserRole !== 'admin') {
                     document.getElementById('adminPathSection').style.display = 'none';
                     document.getElementById('openmusicAuthSection').style.display = 'none';
+                    document.getElementById('backupConfigSection').style.display = 'none';
                     return;
                 }
             }
@@ -1711,6 +1723,8 @@ const getAdminHtml = () => `<!DOCTYPE html>
                 }
                 document.getElementById('openmusicAuthSection').style.display = '';
                 document.getElementById('openmusicAuthEnabled').checked = res.data?.openmusicAuthEnabled !== false;
+                document.getElementById('backupConfigSection').style.display = '';
+                document.getElementById('backupEnabled').checked = res.data?.backupEnabled !== false;
                 document.getElementById('qishuiSignerUrl').value = res.data?.qishuiSignerUrl || '';
                 document.getElementById('loudnessServiceUrl').value = res.data?.loudnessServiceUrl || '';
             }
@@ -2632,6 +2646,25 @@ const getAdminHtml = () => `<!DOCTYPE html>
                 if (res?.success) {
                     document.getElementById('openmusicAuthEnabled').checked = res.data.openmusicAuthEnabled;
                     showToast('OpenMusic 授权设置已保存');
+                } else {
+                    showToast(res?.error || '保存失败', 'error');
+                    await loadConfig();
+                }
+            } finally {
+                button.disabled = false;
+            }
+        });
+
+        document.getElementById('backupConfigForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const button = e.currentTarget.querySelector('button[type="submit"]');
+            const enabled = document.getElementById('backupEnabled').checked;
+            button.disabled = true;
+            try {
+                const res = await api('/admin/config/backup', { method: 'PUT', body: JSON.stringify({ enabled }) });
+                if (res?.success) {
+                    document.getElementById('backupEnabled').checked = res.data.backupEnabled;
+                    showToast('数据备份设置已保存');
                 } else {
                     showToast(res?.error || '保存失败', 'error');
                     await loadConfig();
