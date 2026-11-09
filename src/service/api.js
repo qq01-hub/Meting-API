@@ -9,6 +9,7 @@ import { fetchAuxiliaryLoudness, needsStandardLoudnessUrl, shouldFetchAuxiliaryL
 import { resolveLoudnessServiceUrl } from './loudness-config.js'
 import { parseNeteasePagination } from './netease-pagination.js'
 import { musicFailure } from './music-errors.js'
+import { createTencentFmLogger } from './tencent-fm-log.js'
 
 const MAX_URL_FAILOVER_RETRIES = 3
 
@@ -68,6 +69,10 @@ export default async (ctx) => {
     }
 
     cookie = selectRequestCookie(explicitCookie, storedCookie)
+    const logTencentFm = server === 'tencent' && type === 'fm'
+        ? createTencentFmLogger(ctx, explicitCookie, recordApiLog)
+        : null
+    if (logTencentFm) await logTencentFm('selection', storedCookie)
     ctx.set?.('apiLogContext', { platform: server, cookieId: storedCookie?.id || '' })
     if (type === 'url' && !explicitCookie && !storedCookie) {
         ctx.status(503)
@@ -107,10 +112,19 @@ export default async (ctx) => {
                     ctx.set?.('apiLogContext', { platform: server, cookieId: currentCookie.id })
                     await store.recordCookieRequestSuccess(currentCookie.id)
                     await store.recordCookieFmSuccess(currentCookie.id)
+                    if (logTencentFm) await logTencentFm('success', currentCookie, {
+                        attempt: attemptedIds.length,
+                        attemptedCookieIds: [...attemptedIds],
+                        songCount: data.length,
+                        songIds: data.slice(0, 5).map(song => String(song.id || song.songmid || '')),
+                    })
                     break
                 }
                 hadEmptyResult = true
                 await store.recordCookieFmFailure(currentCookie.id)
+                if (logTencentFm) await logTencentFm('empty', currentCookie, {
+                    attempt: attemptedIds.length, reason: 'empty_result',
+                })
                 pendingApiLogs.push({
                     method: ctx.req.method,
                     path: ctx.req.path,
@@ -125,6 +139,9 @@ export default async (ctx) => {
             } catch (error) {
                 fmFailure = musicFailure(error, server)
                 await store.recordCookieFmFailure(currentCookie.id)
+                if (logTencentFm) await logTencentFm('error', currentCookie, {
+                    attempt: attemptedIds.length, reason: fmFailure.code,
+                })
                 pendingApiLogs.push({
                     method: ctx.req.method,
                     path: ctx.req.path,
@@ -151,6 +168,7 @@ export default async (ctx) => {
                 })
                 currentCookie = null
             }
+            if (logTencentFm) await flushPendingApiLogs()
         }
         data = Array.isArray(data) ? data : []
         if (!data.length) await flushPendingApiLogs()
@@ -166,6 +184,11 @@ export default async (ctx) => {
     } else {
         try {
             data = await p.get(server).handle(type, id, cookie, { quality, signerUrl, ...pagination })
+            if (logTencentFm) await logTencentFm(Array.isArray(data) && data.length ? 'success' : 'empty', null, {
+                attempt: 1,
+                songCount: Array.isArray(data) ? data.length : 0,
+                songIds: Array.isArray(data) ? data.slice(0, 5).map(song => String(song.id || song.songmid || '')) : [],
+            })
         } catch (error) {
         if (type === 'lrc' && query.format === 'json' && ['netease', 'tencent', 'kugou'].includes(server)) {
             console.warn(`[Lyrics] ${server} ordinary lyric unavailable, trying word timing`)
@@ -176,6 +199,7 @@ export default async (ctx) => {
             data = null
         } else if (type === 'fm') {
             const { status, ...failure } = musicFailure(error, server)
+            if (logTencentFm) await logTencentFm('error', null, { attempt: 1, reason: failure.code })
             await recordApiLog({
                 method: ctx.req.method,
                 path: ctx.req.path,

@@ -28,7 +28,16 @@ describe('FM account selection', () => {
         expect(handle.mock.calls.map(call => call[2])).toEqual(['SELECTED', 'VIP'])
         expect(ctx.status).not.toHaveBeenCalledWith(502)
         expect(free.cookie).toBe('FREE')
-        expect(apiLog).not.toHaveBeenCalled()
+        if (server === 'tencent') {
+            expect(apiLog).toHaveBeenCalledWith(expect.objectContaining({
+                code: 'FM_TENCENT_TRACE', event: 'success', cookieId: 'vip',
+            }))
+            expect(apiLog).toHaveBeenCalledWith(expect.objectContaining({
+                code: 'UPSTREAM_REQUEST_FAILED', cookieId: 'selected',
+            }))
+        } else {
+            expect(apiLog).not.toHaveBeenCalled()
+        }
     })
 
     it('returns a typed upstream failure after every eligible FM account fails', async () => {
