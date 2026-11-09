@@ -1,3 +1,13 @@
+> [!IMPORTANT]
+> ## 本项目已迁移
+> 新仓库地址：**https://github.com/qq01-hub/OpenMusic-Meting-API**
+>
+> 后续更新、问题反馈与 Pull Request 请前往新仓库，当前仓库仅保留历史记录
+>
+> 已克隆本仓库的用户可执行：`git remote set-url origin https://github.com/qq01-hub/OpenMusic-Meting-API.git`
+
+---
+
 <div align="center">
 
 # 🎵 OpenMusic-Meting-API
